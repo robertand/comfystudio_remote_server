@@ -20,6 +20,7 @@ const path = require('path')
 const fs = require('fs')
 const fsp = fs.promises
 const http = require('http')
+const https = require('https')
 const net = require('net')
 const { spawn } = require('child_process')
 const { EventEmitter } = require('events')
@@ -118,7 +119,8 @@ function parseHttpBase(httpBase) {
 function probeHttp(httpBase, timeoutMs = 1500) {
   return new Promise((resolve) => {
     const parsed = parseHttpBase(httpBase)
-    const req = http.request(
+    const client = parsed.protocol === 'https:' ? https : http
+    const req = client.request(
       {
         hostname: parsed.hostname,
         port: parsed.port,
@@ -126,6 +128,8 @@ function probeHttp(httpBase, timeoutMs = 1500) {
         method: 'GET',
         timeout: timeoutMs,
         headers: { 'User-Agent': 'ComfyStudio-Launcher/1.0' },
+        // For local development/self-signed certs on https
+        rejectUnauthorized: false,
       },
       (res) => {
         let chunks = ''

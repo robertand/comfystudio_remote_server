@@ -834,34 +834,59 @@ function sanitizeLocalComfyPort(value) {
   return parsed
 }
 
-async function resolveLocalComfyPort() {
+async function resolveLocalComfyConnection() {
   try {
     const data = await fs.readFile(settingsPath, 'utf8')
     const settings = JSON.parse(data)
     const raw = settings?.[COMFY_CONNECTION_SETTING_KEY]
-    const rawPort = raw && typeof raw === 'object' ? raw.port : raw
-    return sanitizeLocalComfyPort(rawPort) || DEFAULT_LOCAL_COMFY_PORT
+
+    if (raw && typeof raw === 'object' && raw.host) {
+      const port = sanitizeLocalComfyPort(raw.port) || DEFAULT_LOCAL_COMFY_PORT
+      const protocol = raw.protocol || 'http:'
+      return {
+        protocol,
+        host: raw.host,
+        port,
+        httpBase: `${protocol}//${raw.host}:${port}`
+      }
+    }
+
+    const port = sanitizeLocalComfyPort(raw) || DEFAULT_LOCAL_COMFY_PORT
+    return {
+      protocol: 'http:',
+      host: '127.0.0.1',
+      port,
+      httpBase: `http://127.0.0.1:${port}`
+    }
   } catch {
-    return DEFAULT_LOCAL_COMFY_PORT
+    return {
+      protocol: 'http:',
+      host: '127.0.0.1',
+      port: DEFAULT_LOCAL_COMFY_PORT,
+      httpBase: `http://127.0.0.1:${DEFAULT_LOCAL_COMFY_PORT}`
+    }
   }
 }
 
-async function checkComfyUIRunning(portOverride = null) {
-  const port = sanitizeLocalComfyPort(portOverride) || await resolveLocalComfyPort()
-  const healthUrl = `http://127.0.0.1:${port}/system_stats`
-  return new Promise((resolve) => {
-    const req = http.get(healthUrl, (res) => {
-      resolve({
-        ok: res.statusCode === 200 || (res.statusCode >= 200 && res.statusCode < 400),
-        port,
-      })
-    })
-    req.on('error', () => resolve({ ok: false, port }))
-    req.setTimeout(COMFYUI_CHECK_MS, () => {
-      req.destroy()
-      resolve({ ok: false, port })
-    })
-  })
+async function checkComfyUIRunning() {
+  const connection = await resolveLocalComfyConnection()
+  const healthUrl = `${connection.httpBase}/system_stats`
+
+  try {
+    const response = await net.fetch(healthUrl, { method: 'GET' })
+    return {
+      ok: response.ok,
+      port: connection.port,
+      httpBase: connection.httpBase
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      port: connection.port,
+      httpBase: connection.httpBase,
+      error: error.message
+    }
+  }
 }
 
 // ============================================
@@ -893,11 +918,17 @@ async function writeSettingsRaw(mutator) {
 async function refreshLauncherConfigCache() {
   const settings = await readSettingsRaw()
   cachedLauncherConfig = safeCloneLauncherConfig(settings?.[LAUNCHER_SETTING_KEY])
-  const port = sanitizeLocalComfyPort(
-    settings?.[COMFY_CONNECTION_SETTING_KEY]?.port
-    ?? settings?.[COMFY_CONNECTION_SETTING_KEY]
-  ) || DEFAULT_LOCAL_COMFY_PORT
-  cachedHttpBase = `http://127.0.0.1:${port}`
+
+  const rawConn = settings?.[COMFY_CONNECTION_SETTING_KEY]
+  if (rawConn && typeof rawConn === 'object' && rawConn.host) {
+    const protocol = rawConn.protocol || 'http:'
+    const port = sanitizeLocalComfyPort(rawConn.port) || DEFAULT_LOCAL_COMFY_PORT
+    cachedHttpBase = `${protocol}//${rawConn.host}:${port}`
+  } else {
+    const port = sanitizeLocalComfyPort(rawConn) || DEFAULT_LOCAL_COMFY_PORT
+    cachedHttpBase = `http://127.0.0.1:${port}`
+  }
+
   return { config: cachedLauncherConfig, httpBase: cachedHttpBase, comfyRootPath: settings?.[COMFY_ROOT_SETTING_KEY] || '' }
 }
 
@@ -959,13 +990,13 @@ async function runStartupChecks() {
   const start = Date.now()
   if (!splashWindow || splashWindow.isDestroyed()) return
 
-  const comfyPort = await resolveLocalComfyPort()
-  setSplashStatus(`Checking ComfyUI on localhost:${comfyPort}…`)
-  const comfyCheck = await checkComfyUIRunning(comfyPort)
+  const connection = await resolveLocalComfyConnection()
+  setSplashStatus(`Checking ComfyUI on ${connection.host}:${connection.port}…`)
+  const comfyCheck = await checkComfyUIRunning()
   if (comfyCheck.ok) {
-    setSplashStatus(`ComfyUI connected (localhost:${comfyCheck.port})`)
+    setSplashStatus(`ComfyUI connected (${connection.host}:${connection.port})`)
   } else {
-    setSplashStatus(`ComfyUI not detected on localhost:${comfyCheck.port}`)
+    setSplashStatus(`ComfyUI not detected on ${connection.host}:${connection.port}`)
   }
   await delay(STEP_DELAY_MS)
 
@@ -3173,6 +3204,21 @@ app.on('before-quit', async (event) => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
+  }
+})
+
+// Handle self-signed certificates for local HTTPS ComfyUI servers
+app.on('certificate-error', (event, webContents, url, error, certificate, callback) => {
+  // Only bypass for localhost/loopback or if the user has explicitly configured a custom server.
+  // For safety, we can check if the URL matches our configured ComfyUI endpoint.
+  // But for local tools, it's common to allow bypassing this.
+  const isLocal = url.startsWith('https://127.0.0.1') || url.startsWith('https://localhost')
+
+  if (isLocal) {
+    event.preventDefault()
+    callback(true)
+  } else {
+    callback(false)
   }
 })
 
