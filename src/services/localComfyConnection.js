@@ -243,7 +243,7 @@ export async function hydrateLocalComfyConnection() {
   return hydrationPromise
 }
 
-export async function saveComfyConnection(input) {
+export async function saveLocalComfyConnectionPort(input) {
   const parsed = parseLocalComfyPortInput(input)
   if (!parsed.success) {
     return { success: false, error: parsed.error }
@@ -272,6 +272,8 @@ export async function saveComfyConnection(input) {
   dispatchConnectionChanged(config)
   return { success: true, config }
 }
+
+export const saveComfyConnection = saveLocalComfyConnectionPort
 
 export async function checkLocalComfyConnection(options = {}) {
   const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 4500
@@ -325,4 +327,3 @@ export async function checkLocalComfyConnection(options = {}) {
     clearTimeout(timer)
   }
 }
-
