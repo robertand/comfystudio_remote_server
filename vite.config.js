@@ -20,15 +20,69 @@ export default defineConfig({
     allowedHosts: true,
     // Proxy requests to ComfyUI to avoid CORS issues
     proxy: {
+      // Dynamic proxy for arbitrary ComfyUI servers.
+      // Format: /comfy-proxy/{protocol}/{host}/{port}/...
+      // Example: /comfy-proxy/https/pro5091.proai123.com/443/system_stats
+      '^/comfy-proxy/([^/]+)/([^/]+)/([^/]+)/?': {
+        target: 'http://localhost', // Fallback, will be overridden by router
+        changeOrigin: true,
+        secure: false,
+        ws: true,
+        router: (req) => {
+          const match = req.url.match(/^\/comfy-proxy\/([^/]+)\/([^/]+)\/([^/]+)/)
+          if (match) {
+            const [_, protocol, host, port] = match
+            const p = Number(port)
+            const isStandard = (protocol === 'http' && p === 80) || (protocol === 'https' && p === 443)
+            return `${protocol}://${host}${isStandard ? '' : `:${port}`}`
+          }
+          return 'http://127.0.0.1:8188'
+        },
+        rewrite: (path) => path.replace(/^\/comfy-proxy\/[^/]+\/[^/]+\/[^/]+/, '') || '/',
+        configure: (proxy, options) => {
+          const spoofHeaders = (proxyReq, req) => {
+            const match = req.url.match(/^\/comfy-proxy\/([^/]+)\/([^/]+)\/([^/]+)/)
+            if (match) {
+              const [_, protocol, host, port] = match
+              const p = Number(port)
+              const isStandard = (protocol === 'http' && p === 80) || (protocol === 'https' && p === 443)
+              const targetHost = isStandard ? host : `${host}:${port}`
+              const targetOrigin = `${protocol}://${targetHost}`
+
+              proxyReq.setHeader('Origin', targetOrigin)
+              proxyReq.setHeader('Host', targetHost)
+              proxyReq.setHeader('Referer', `${targetOrigin}/`)
+            }
+          }
+
+          proxy.on('proxyReq', (proxyReq, req, res) => {
+            spoofHeaders(proxyReq, req)
+          })
+
+          proxy.on('proxyReqWs', (proxyReq, req, socket, options, head) => {
+            spoofHeaders(proxyReq, req)
+          })
+
+          proxy.on('proxyRes', (proxyRes, req, res) => {
+            // Strip headers that prevent iframe embedding
+            const keysToDelete = ['x-frame-options', 'content-security-policy']
+            for (const key of Object.keys(proxyRes.headers)) {
+              if (keysToDelete.includes(key.toLowerCase())) {
+                delete proxyRes.headers[key]
+              }
+            }
+            // Ensure CORS is allowed from our origin
+            proxyRes.headers['access-control-allow-origin'] = '*'
+            proxyRes.headers['access-control-allow-methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+            proxyRes.headers['access-control-allow-headers'] = '*'
+          })
+        }
+      },
+      // Legacy hardcoded proxies for local development
       '/system_stats': {
         target: 'http://127.0.0.1:8188',
         changeOrigin: true,
         secure: false,
-        router: (req) => {
-          // This is only for the dev server. Real Electron app bypasses this
-          // via localComfyConnection.js which points directly to the server.
-          return 'http://127.0.0.1:8188';
-        }
       },
       '/prompt': {
         target: 'http://127.0.0.1:8188',

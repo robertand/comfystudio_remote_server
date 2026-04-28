@@ -45,6 +45,27 @@ function buildConnection(connection) {
   const isStandardPort = (httpProtocol === 'http:' && port === 80) || (httpProtocol === 'https:' && port === 443)
   const hostPort = isStandardPort ? host : `${host}:${port}`
 
+  const isElectron = typeof window !== 'undefined' && !!window?.electronAPI?.isElectron
+
+  if (!isElectron && typeof window !== 'undefined') {
+    // In web browser, use the dynamic Vite proxy to bypass CORS and iframe restrictions.
+    // Format: /comfy-proxy/{protocol-no-colon}/{host}/{port}
+    const protoNoColon = httpProtocol.replace(':', '')
+    const proxyPath = `/comfy-proxy/${protoNoColon}/${host}/${port}`
+
+    // WebSocket requires an absolute URL.
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const wsBase = `${wsProtocol}//${window.location.host}${proxyPath}`
+
+    return {
+      protocol: httpProtocol,
+      host,
+      port,
+      httpBase: proxyPath,
+      wsBase: wsBase,
+    }
+  }
+
   return {
     protocol: httpProtocol,
     host,

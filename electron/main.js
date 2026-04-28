@@ -3163,15 +3163,32 @@ app.whenReady().then(() => {
   // Spoof Origin and Host headers for ComfyUI requests to avoid 403 Forbidden errors.
   // This is necessary when connecting to remote ComfyUI instances or through tunnels.
   const { session } = require('electron')
+  const isTargetUrl = (url) => {
+    if (!url) return false
+    const u = url.toLowerCase()
+    const target = cachedHttpBase.toLowerCase()
+    if (u.startsWith(target)) return true
+
+    // Also match if the target is a standard port URL but the request omits it
+    try {
+      const parsedUrl = new URL(url)
+      const parsedTarget = new URL(cachedHttpBase)
+      return parsedUrl.hostname === parsedTarget.hostname && parsedUrl.protocol === parsedTarget.protocol
+    } catch (_) {
+      return false
+    }
+  }
+
   session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
     const url = details.url
-    const targetBase = cachedHttpBase.toLowerCase()
 
-    if (url.toLowerCase().startsWith(targetBase)) {
+    if (isTargetUrl(url)) {
       try {
         const targetUrl = new URL(cachedHttpBase)
         details.requestHeaders['Origin'] = targetUrl.origin
         details.requestHeaders['Host'] = targetUrl.host
+        // Some proxies check Referer for CSRF protection
+        details.requestHeaders['Referer'] = targetUrl.origin + '/'
       } catch (_) {}
     }
     callback({ requestHeaders: details.requestHeaders })
@@ -3181,9 +3198,8 @@ app.whenReady().then(() => {
   // This fixes the "black screen" issue when ComfyUI is accessed through tunnels or from different origins.
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     const url = details.url
-    const targetBase = cachedHttpBase.toLowerCase()
 
-    if (url.toLowerCase().startsWith(targetBase)) {
+    if (isTargetUrl(url)) {
       const responseHeaders = details.responseHeaders
       const keysToDelete = ['x-frame-options', 'content-security-policy']
 
