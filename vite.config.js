@@ -16,6 +16,12 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Allow specific hosts
+    allowedHosts: [
+      'comfystudio.proai123.com',
+      'localhost',
+      '127.0.0.1',
+    ],
     // Proxy requests to ComfyUI to avoid CORS issues
     proxy: {
       '/system_stats': {
