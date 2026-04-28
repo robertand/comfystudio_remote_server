@@ -889,9 +889,18 @@ async function checkComfyUIRunning() {
   const healthUrl = `${connection.httpBase}/system_stats`
 
   try {
-    const response = await net.fetch(healthUrl, { method: 'GET' })
+    const u = new URL(connection.httpBase)
+    const response = await net.fetch(healthUrl, {
+      method: 'GET',
+      headers: {
+        'Origin': u.origin,
+        'Host': u.host,
+        'Referer': `${u.origin}/`
+      }
+    })
     return {
       ok: response.ok,
+      status: response.status,
       port: connection.port,
       httpBase: connection.httpBase
     }

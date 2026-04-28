@@ -34,24 +34,23 @@ export default defineConfig({
             const [_, protocol, host, port] = match
             const p = Number(port)
             const isStandard = (protocol === 'http' && p === 80) || (protocol === 'https' && p === 443)
-            return `${protocol}://${host}${isStandard ? '' : `:${port}`}`
+            const target = `${protocol}://${host}${isStandard ? '' : `:${port}`}`
+            req._comfyTarget = target
+            return target
           }
           return 'http://127.0.0.1:8188'
         },
         rewrite: (path) => path.replace(/^\/comfy-proxy\/[^/]+\/[^/]+\/[^/]+/, '') || '/',
         configure: (proxy, options) => {
           const spoofHeaders = (proxyReq, req) => {
-            const match = req.url.match(/^\/comfy-proxy\/([^/]+)\/([^/]+)\/([^/]+)/)
-            if (match) {
-              const [_, protocol, host, port] = match
-              const p = Number(port)
-              const isStandard = (protocol === 'http' && p === 80) || (protocol === 'https' && p === 443)
-              const targetHost = isStandard ? host : `${host}:${port}`
-              const targetOrigin = `${protocol}://${targetHost}`
-
-              proxyReq.setHeader('Origin', targetOrigin)
-              proxyReq.setHeader('Host', targetHost)
-              proxyReq.setHeader('Referer', `${targetOrigin}/`)
+            const targetUrl = req._comfyTarget || (typeof options.target === 'string' ? options.target : options.target?.href)
+            if (targetUrl) {
+              try {
+                const u = new URL(targetUrl)
+                proxyReq.setHeader('Origin', u.origin)
+                proxyReq.setHeader('Host', u.host)
+                proxyReq.setHeader('Referer', `${u.origin}/`)
+              } catch (_) {}
             }
           }
 

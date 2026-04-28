@@ -330,12 +330,18 @@ export async function checkLocalComfyConnection(options = {}) {
         port: config.port,
       }
     }
+
+    let errorDetail = ''
+    try {
+      errorDetail = await response.text()
+    } catch (_) {}
+
     return {
       ok: false,
       status: response.status,
       httpBase: config.httpBase,
       port: config.port,
-      error: `ComfyUI returned HTTP ${response.status}.`,
+      error: `ComfyUI returned HTTP ${response.status}${errorDetail ? `: ${errorDetail.slice(0, 100)}` : ''}`,
     }
   } catch (err) {
     const isTimeout = err?.name === 'AbortError'
