@@ -42,12 +42,15 @@ function buildConnection(connection) {
   const httpProtocol = protocol.endsWith(':') ? protocol : `${protocol}:`
   const wsProtocol = httpProtocol === 'https:' ? 'wss:' : 'ws:'
 
+  const isStandardPort = (httpProtocol === 'http:' && port === 80) || (httpProtocol === 'https:' && port === 443)
+  const hostPort = isStandardPort ? host : `${host}:${port}`
+
   return {
     protocol: httpProtocol,
     host,
     port,
-    httpBase: `${httpProtocol}//${host}:${port}`,
-    wsBase: `${wsProtocol}//${host}:${port}`,
+    httpBase: `${httpProtocol}//${hostPort}`,
+    wsBase: `${wsProtocol}//${hostPort}`,
   }
 }
 

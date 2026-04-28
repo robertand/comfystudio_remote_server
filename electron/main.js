@@ -834,36 +834,52 @@ function sanitizeLocalComfyPort(value) {
   return parsed
 }
 
+function buildConnectionUrl(protocol, host, port) {
+  const httpProtocol = protocol.endsWith(':') ? protocol : `${protocol}:`
+  const isStandardPort = (httpProtocol === 'http:' && port === 80) || (httpProtocol === 'https:' && port === 443)
+  const hostPort = isStandardPort ? host : `${host}:${port}`
+  return `${httpProtocol}//${hostPort}`
+}
+
 async function resolveLocalComfyConnection() {
   try {
     const data = await fs.readFile(settingsPath, 'utf8')
     const settings = JSON.parse(data)
     const raw = settings?.[COMFY_CONNECTION_SETTING_KEY]
 
+    let protocol = 'http:'
+    let host = '127.0.0.1'
+    let port = DEFAULT_LOCAL_COMFY_PORT
+
     if (raw && typeof raw === 'object' && raw.host) {
-      const port = sanitizeLocalComfyPort(raw.port) || DEFAULT_LOCAL_COMFY_PORT
-      const protocol = raw.protocol || 'http:'
-      return {
-        protocol,
-        host: raw.host,
-        port,
-        httpBase: `${protocol}//${raw.host}:${port}`
+      protocol = raw.protocol || 'http:'
+      host = raw.host
+      port = sanitizeLocalComfyPort(raw.port) || DEFAULT_LOCAL_COMFY_PORT
+    } else if (typeof raw === 'string' && raw.includes('://')) {
+      try {
+        const u = new URL(raw)
+        protocol = u.protocol
+        host = u.hostname
+        port = sanitizeLocalComfyPort(u.port) || (u.protocol === 'https:' ? 443 : DEFAULT_LOCAL_COMFY_PORT)
+      } catch (e) {
+        port = sanitizeLocalComfyPort(raw) || DEFAULT_LOCAL_COMFY_PORT
       }
+    } else {
+      port = sanitizeLocalComfyPort(raw) || DEFAULT_LOCAL_COMFY_PORT
     }
 
-    const port = sanitizeLocalComfyPort(raw) || DEFAULT_LOCAL_COMFY_PORT
     return {
-      protocol: 'http:',
-      host: '127.0.0.1',
+      protocol,
+      host,
       port,
-      httpBase: `http://127.0.0.1:${port}`
+      httpBase: buildConnectionUrl(protocol, host, port)
     }
   } catch {
     return {
       protocol: 'http:',
       host: '127.0.0.1',
       port: DEFAULT_LOCAL_COMFY_PORT,
-      httpBase: `http://127.0.0.1:${DEFAULT_LOCAL_COMFY_PORT}`
+      httpBase: buildConnectionUrl('http:', '127.0.0.1', DEFAULT_LOCAL_COMFY_PORT)
     }
   }
 }
@@ -897,6 +913,7 @@ const COMFY_ROOT_SETTING_KEY = 'comfyRootPath'
 const launcherLogDir = path.join(app.getPath('userData'), 'logs')
 let cachedLauncherConfig = safeCloneLauncherConfig(DEFAULT_LAUNCHER_CONFIG)
 let cachedHttpBase = `http://127.0.0.1:${DEFAULT_LOCAL_COMFY_PORT}`
+let cachedComfyHost = '127.0.0.1'
 let launcherQuitConfirmed = false
 
 async function readSettingsRaw() {
@@ -919,15 +936,9 @@ async function refreshLauncherConfigCache() {
   const settings = await readSettingsRaw()
   cachedLauncherConfig = safeCloneLauncherConfig(settings?.[LAUNCHER_SETTING_KEY])
 
-  const rawConn = settings?.[COMFY_CONNECTION_SETTING_KEY]
-  if (rawConn && typeof rawConn === 'object' && rawConn.host) {
-    const protocol = rawConn.protocol || 'http:'
-    const port = sanitizeLocalComfyPort(rawConn.port) || DEFAULT_LOCAL_COMFY_PORT
-    cachedHttpBase = `${protocol}//${rawConn.host}:${port}`
-  } else {
-    const port = sanitizeLocalComfyPort(rawConn) || DEFAULT_LOCAL_COMFY_PORT
-    cachedHttpBase = `http://127.0.0.1:${port}`
-  }
+  const connection = await resolveLocalComfyConnection()
+  cachedHttpBase = connection.httpBase
+  cachedComfyHost = connection.host
 
   return { config: cachedLauncherConfig, httpBase: cachedHttpBase, comfyRootPath: settings?.[COMFY_ROOT_SETTING_KEY] || '' }
 }
@@ -2067,6 +2078,12 @@ ipcMain.handle('settings:set', async (event, key, value) => {
     
     settings[key] = value
     await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2))
+
+    // Refresh internal caches if connection or launcher settings change
+    if (key === COMFY_CONNECTION_SETTING_KEY || key === LAUNCHER_SETTING_KEY) {
+      await refreshLauncherConfigCache()
+    }
+
     return { success: true }
   } catch (err) {
     return { success: false, error: err.message }
@@ -2079,6 +2096,11 @@ ipcMain.handle('settings:delete', async (event, key) => {
     const settings = JSON.parse(data)
     delete settings[key]
     await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2))
+
+    if (key === COMFY_CONNECTION_SETTING_KEY || key === LAUNCHER_SETTING_KEY) {
+      await refreshLauncherConfigCache()
+    }
+
     return { success: true }
   } catch (err) {
     return { success: false, error: err.message }
@@ -3137,6 +3159,46 @@ ipcMain.handle('export:checkNvenc', async () => {
 
 app.whenReady().then(() => {
   registerFileProtocol()
+
+  // Spoof Origin and Host headers for ComfyUI requests to avoid 403 Forbidden errors.
+  // This is necessary when connecting to remote ComfyUI instances or through tunnels.
+  const { session } = require('electron')
+  session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
+    const url = details.url
+    const targetBase = cachedHttpBase.toLowerCase()
+
+    if (url.toLowerCase().startsWith(targetBase)) {
+      try {
+        const targetUrl = new URL(cachedHttpBase)
+        details.requestHeaders['Origin'] = targetUrl.origin
+        details.requestHeaders['Host'] = targetUrl.host
+      } catch (_) {}
+    }
+    callback({ requestHeaders: details.requestHeaders })
+  })
+
+  // Strip X-Frame-Options and Content-Security-Policy headers to allow embedding ComfyUI in an iframe.
+  // This fixes the "black screen" issue when ComfyUI is accessed through tunnels or from different origins.
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const url = details.url
+    const targetBase = cachedHttpBase.toLowerCase()
+
+    if (url.toLowerCase().startsWith(targetBase)) {
+      const responseHeaders = details.responseHeaders
+      const keysToDelete = ['x-frame-options', 'content-security-policy']
+
+      for (const key of Object.keys(responseHeaders)) {
+        if (keysToDelete.includes(key.toLowerCase())) {
+          delete responseHeaders[key]
+        }
+      }
+
+      callback({ cancel: false, responseHeaders })
+    } else {
+      callback({ cancel: false, responseHeaders: details.responseHeaders })
+    }
+  })
+
   initComfyLauncher()
     .then(() => maybeAutoStartComfyLauncher())
     .catch((error) => {
@@ -3209,12 +3271,20 @@ app.on('window-all-closed', () => {
 
 // Handle self-signed certificates for local HTTPS ComfyUI servers
 app.on('certificate-error', (event, webContents, url, error, certificate, callback) => {
-  // Only bypass for localhost/loopback or if the user has explicitly configured a custom server.
-  // For safety, we can check if the URL matches our configured ComfyUI endpoint.
-  // But for local tools, it's common to allow bypassing this.
+  // Only bypass for localhost/loopback or if the url matches the configured ComfyUI server.
   const isLocal = url.startsWith('https://127.0.0.1') || url.startsWith('https://localhost')
 
-  if (isLocal) {
+  let isConfiguredRemote = false
+  if (cachedComfyHost && cachedComfyHost !== '127.0.0.1' && cachedComfyHost !== 'localhost') {
+    try {
+      const u = new URL(url)
+      if (u.hostname === cachedComfyHost) {
+        isConfiguredRemote = true
+      }
+    } catch (_) {}
+  }
+
+  if (isLocal || isConfiguredRemote) {
     event.preventDefault()
     callback(true)
   } else {
