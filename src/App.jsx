@@ -376,7 +376,7 @@ function App() {
           </div>
           <iframe
             key={`comfy-iframe-${comfyIframeUrl}-${comfyIframeNonce}`}
-            src={comfyIframeUrl && !comfyIframeUrl.includes('?') && !comfyIframeUrl.endsWith('/') ? `${comfyIframeUrl}/` : comfyIframeUrl}
+            src={comfyIframeUrl}
             title="ComfyUI"
             className="flex-1 w-full min-h-0 border-0"
             sandbox="allow-scripts allow-same-origin allow-forms allow-popups"

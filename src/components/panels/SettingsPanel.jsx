@@ -63,7 +63,7 @@ function SettingsPanel() {
     }).catch(() => {
       setComfyConnectionState({
         status: 'error',
-        message: `Could not load local ComfyUI port. Using ${DEFAULT_COMFY_PORT}.`,
+        message: `Could not load ComfyUI connection. Using ${DEFAULT_COMFY_PORT}.`,
       })
     })
   }, [])
@@ -297,10 +297,7 @@ function SettingsPanel() {
             <div>
               <label className="block text-[10px] text-sf-text-muted mb-1">ComfyUI Server Address</label>
               <input
-                type="number"
-                min={1}
-                max={65535}
-                step={1}
+                type="text"
                 value={comfyAddressInput}
                 onChange={(e) => setComfyAddressInput(e.target.value)}
                 onBlur={() => { void handleSaveComfyConnection() }}

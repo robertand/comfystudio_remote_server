@@ -216,7 +216,7 @@ function GeneralTab({ initialSection = null }) {
 
       try {
         const connection = await hydrateLocalComfyConnection()
-        setComfyAddressInput(String(connection.port || DEFAULT_COMFY_PORT))
+        setComfyAddressInput(connection.httpBase)
         setComfyConnectionState({
           status: 'idle',
           message: `Local endpoint: ${connection.httpBase}`,
@@ -224,7 +224,7 @@ function GeneralTab({ initialSection = null }) {
       } catch {
         setComfyConnectionState({
           status: 'error',
-          message: `Could not load local ComfyUI port. Using ${DEFAULT_COMFY_PORT}.`,
+          message: `Could not load ComfyUI connection. Using ${DEFAULT_COMFY_PORT}.`,
         })
       }
     })()
@@ -532,10 +532,7 @@ function GeneralTab({ initialSection = null }) {
           <div>
             <label className="block text-xs text-sf-text-muted mb-1">ComfyUI Server Address</label>
             <input
-              type="number"
-              min={1}
-              max={65535}
-              step={1}
+              type="text"
               value={comfyAddressInput}
               onChange={(e) => setComfyAddressInput(e.target.value)}
               onBlur={() => { void handleSaveComfyConnection() }}
