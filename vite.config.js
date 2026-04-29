@@ -35,6 +35,7 @@ export default defineConfig({
             const p = Number(port)
             const isStandard = (protocol === 'http' && p === 80) || (protocol === 'https' && p === 443)
             const target = `${protocol}://${host}${isStandard ? '' : `:${port}`}`
+            console.log(`[Proxy] Routing ${req.url} to ${target}`)
             req._comfyTarget = target
             return target
           }
@@ -42,8 +43,8 @@ export default defineConfig({
         },
         rewrite: (path) => path.replace(/^\/comfy-proxy\/[^/]+\/[^/]+\/[^/]+/, '') || '/',
         configure: (proxy, options) => {
-          const spoofHeaders = (proxyReq, req) => {
-            const targetUrl = req._comfyTarget || (typeof options.target === 'string' ? options.target : options.target?.href)
+          const spoofHeaders = (proxyReq, req, res, opts) => {
+            const targetUrl = req._comfyTarget || opts.target
             if (targetUrl) {
               try {
                 const u = new URL(targetUrl)
@@ -54,12 +55,12 @@ export default defineConfig({
             }
           }
 
-          proxy.on('proxyReq', (proxyReq, req, res) => {
-            spoofHeaders(proxyReq, req)
+          proxy.on('proxyReq', (proxyReq, req, res, opts) => {
+            spoofHeaders(proxyReq, req, res, opts)
           })
 
-          proxy.on('proxyReqWs', (proxyReq, req, socket, options, head) => {
-            spoofHeaders(proxyReq, req)
+          proxy.on('proxyReqWs', (proxyReq, req, socket, opts, head) => {
+            spoofHeaders(proxyReq, req, null, opts)
           })
 
           proxy.on('proxyRes', (proxyRes, req, res) => {
@@ -152,3 +153,4 @@ export default defineConfig({
     exclude: [],
   },
 })
+// Ensure the file is flushed and correctly parsed by the dev server

@@ -3172,57 +3172,75 @@ app.whenReady().then(() => {
   // Spoof Origin and Host headers for ComfyUI requests to avoid 403 Forbidden errors.
   // This is necessary when connecting to remote ComfyUI instances or through tunnels.
   const { session } = require('electron')
-  const isTargetUrl = (url) => {
+  const isComfyRequest = (url) => {
     if (!url) return false
     const u = url.toLowerCase()
-    const target = cachedHttpBase.toLowerCase()
-    if (u.startsWith(target)) return true
 
-    // Also match if the target is a standard port URL but the request omits it
+    // Always include requests to our configured base
+    if (cachedHttpBase && u.startsWith(cachedHttpBase.toLowerCase())) return true
+    // Handle proxy path
+    if (u.includes('/comfy-proxy/')) return true
+
+    // Check for common ComfyUI paths to catch "Test Connection" calls to new addresses
+    const comfyPaths = ['/system_stats', '/prompt', '/history', '/queue', '/interrupt', '/view', '/upload', '/ws', '/object_info']
     try {
-      const parsedUrl = new URL(url)
-      const parsedTarget = new URL(cachedHttpBase)
-      return parsedUrl.hostname === parsedTarget.hostname && parsedUrl.protocol === parsedTarget.protocol
-    } catch (_) {
-      return false
-    }
+      const parsed = new URL(url)
+      if (comfyPaths.some(p => parsed.pathname.startsWith(p))) return true
+    } catch (_) {}
+
+    return false
   }
 
-  session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
-    const url = details.url
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: ['*://*/*'] },
+    (details, callback) => {
+      const url = details.url
 
-    if (isTargetUrl(url)) {
-      try {
-        const targetUrl = new URL(cachedHttpBase)
-        details.requestHeaders['Origin'] = targetUrl.origin
-        details.requestHeaders['Host'] = targetUrl.host
-        // Some proxies check Referer for CSRF protection
-        details.requestHeaders['Referer'] = targetUrl.origin + '/'
-      } catch (_) {}
-    }
-    callback({ requestHeaders: details.requestHeaders })
-  })
-
-  // Strip X-Frame-Options and Content-Security-Policy headers to allow embedding ComfyUI in an iframe.
-  // This fixes the "black screen" issue when ComfyUI is accessed through tunnels or from different origins.
-  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    const url = details.url
-
-    if (isTargetUrl(url)) {
-      const responseHeaders = details.responseHeaders
-      const keysToDelete = ['x-frame-options', 'content-security-policy']
-
-      for (const key of Object.keys(responseHeaders)) {
-        if (keysToDelete.includes(key.toLowerCase())) {
-          delete responseHeaders[key]
-        }
+      if (isComfyRequest(url)) {
+        try {
+          const targetUrl = new URL(url)
+          // Spoof Origin and Host to match the target itself.
+          // This bypasses ComfyUI's origin_only_middleware.
+          // 'extraHeaders' is needed in the listener options to modify Origin/Referer.
+          details.requestHeaders['Origin'] = targetUrl.origin
+          details.requestHeaders['Host'] = targetUrl.host
+          details.requestHeaders['Referer'] = targetUrl.origin + '/'
+        } catch (_) {}
       }
+      callback({ requestHeaders: details.requestHeaders })
+    },
+    ['requestHeaders', 'extraHeaders']
+  )
 
-      callback({ cancel: false, responseHeaders })
-    } else {
-      callback({ cancel: false, responseHeaders: details.responseHeaders })
-    }
-  })
+  // Strip restrictive headers and add CORS headers to allow renderer to access remote ComfyUI.
+  session.defaultSession.webRequest.onHeadersReceived(
+    { urls: ['*://*/*'] },
+    (details, callback) => {
+      const url = details.url
+
+      if (isComfyRequest(url)) {
+        const responseHeaders = details.responseHeaders
+
+        // Allow iframe embedding
+        const keysToDelete = ['x-frame-options', 'content-security-policy']
+        for (const key of Object.keys(responseHeaders)) {
+          if (keysToDelete.includes(key.toLowerCase())) {
+            delete responseHeaders[key]
+          }
+        }
+
+        // Enable CORS for the renderer
+        responseHeaders['Access-Control-Allow-Origin'] = ['*']
+        responseHeaders['Access-Control-Allow-Methods'] = ['GET, POST, PUT, DELETE, OPTIONS']
+        responseHeaders['Access-Control-Allow-Headers'] = ['*']
+
+        callback({ cancel: false, responseHeaders })
+      } else {
+        callback({ cancel: false, responseHeaders: details.responseHeaders })
+      }
+    },
+    ['responseHeaders', 'extraHeaders']
+  )
 
   initComfyLauncher()
     .then(() => maybeAutoStartComfyLauncher())

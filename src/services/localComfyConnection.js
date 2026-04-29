@@ -45,7 +45,10 @@ function buildConnection(connection) {
   const isStandardPort = (httpProtocol === 'http:' && port === 80) || (httpProtocol === 'https:' && port === 443)
   const hostPort = isStandardPort ? host : `${host}:${port}`
 
-  const isElectron = typeof window !== 'undefined' && !!window?.electronAPI?.isElectron
+  const isElectron = typeof window !== 'undefined' && (
+    !!window?.electronAPI?.isElectron ||
+    /electron/i.test(navigator.userAgent)
+  )
 
   if (!isElectron && typeof window !== 'undefined') {
     // In web browser, use the dynamic Vite proxy to bypass CORS and iframe restrictions.
