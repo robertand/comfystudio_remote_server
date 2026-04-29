@@ -106,7 +106,7 @@ function SettingsPanel() {
     }
     setComfyConnectionState({
       status: 'testing',
-      message: `Testing localhost:${parsed.port}...`,
+      message: `Testing ${parsed.config.host}:${parsed.config.port}...`,
     })
     const testResult = await checkLocalComfyConnection({ port: parsed.port })
     if (testResult.ok) {
@@ -118,7 +118,7 @@ function SettingsPanel() {
     }
     setComfyConnectionState({
       status: 'error',
-      message: testResult.error || `Could not connect to localhost:${parsed.port}.`,
+      message: testResult.error || `Could not connect to ${parsed.config.host}:${parsed.config.port}.`,
     })
   }
 

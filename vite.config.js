@@ -2,153 +2,73 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 
-// Detect if building for Electron
 const isElectron = process.env.ELECTRON === 'true'
 
 export default defineConfig({
   plugins: [react()],
-  // Use relative paths for Electron (file:// protocol)
-  base: './',
+  base: isElectron ? './' : '/',
   resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
-    },
+    alias: { '@': path.resolve(__dirname, './src') },
   },
   server: {
     port: 5173,
-    // Proxy requests to ComfyUI to avoid CORS issues
+    allowedHosts: true,
     proxy: {
-      '/system_stats': {
+      '^/api/v1/comfy-proxy/([^/]+)/([^/]+)/([^/]+)/?': {
         target: 'http://127.0.0.1:8188',
         changeOrigin: true,
         secure: false,
-        configure: (proxy, options) => {
-          proxy.on('proxyReq', (proxyReq, req, res) => {
-            proxyReq.setHeader('Origin', 'http://127.0.0.1:8188');
-            proxyReq.setHeader('Host', '127.0.0.1:8188');
-          });
-        }
-      },
-      '/prompt': {
-        target: 'http://127.0.0.1:8188',
-        changeOrigin: true,
-        secure: false,
-        configure: (proxy, options) => {
-          proxy.on('proxyReq', (proxyReq, req, res) => {
-            proxyReq.setHeader('Origin', 'http://127.0.0.1:8188');
-            proxyReq.setHeader('Host', '127.0.0.1:8188');
-          });
-        }
-      },
-      '/history': {
-        target: 'http://127.0.0.1:8188',
-        changeOrigin: true,
-        secure: false,
-        configure: (proxy, options) => {
-          proxy.on('proxyReq', (proxyReq, req, res) => {
-            proxyReq.setHeader('Origin', 'http://127.0.0.1:8188');
-            proxyReq.setHeader('Host', '127.0.0.1:8188');
-          });
-        }
-      },
-      '/queue': {
-        target: 'http://127.0.0.1:8188',
-        changeOrigin: true,
-        secure: false,
-        configure: (proxy, options) => {
-          proxy.on('proxyReq', (proxyReq, req, res) => {
-            proxyReq.setHeader('Origin', 'http://127.0.0.1:8188');
-            proxyReq.setHeader('Host', '127.0.0.1:8188');
-          });
-        }
-      },
-      '/interrupt': {
-        target: 'http://127.0.0.1:8188',
-        changeOrigin: true,
-        secure: false,
-        configure: (proxy, options) => {
-          proxy.on('proxyReq', (proxyReq, req, res) => {
-            proxyReq.setHeader('Origin', 'http://127.0.0.1:8188');
-            proxyReq.setHeader('Host', '127.0.0.1:8188');
-          });
-        }
-      },
-      '/view': {
-        target: 'http://127.0.0.1:8188',
-        changeOrigin: true,
-        secure: false,
-        configure: (proxy, options) => {
-          proxy.on('proxyReq', (proxyReq, req, res) => {
-            proxyReq.setHeader('Origin', 'http://127.0.0.1:8188');
-            proxyReq.setHeader('Host', '127.0.0.1:8188');
-          });
-        }
-      },
-      '/upload': {
-        target: 'http://127.0.0.1:8188',
-        changeOrigin: true,
-        secure: false,
-        configure: (proxy, options) => {
-          proxy.on('proxyReq', (proxyReq, req, res) => {
-            proxyReq.setHeader('Origin', 'http://127.0.0.1:8188');
-            proxyReq.setHeader('Host', '127.0.0.1:8188');
-          });
-        }
-      },
-      '/workflow_templates': {
-        target: 'http://127.0.0.1:8188',
-        changeOrigin: true,
-        secure: false,
-        configure: (proxy, options) => {
-          proxy.on('proxyReq', (proxyReq, req, res) => {
-            proxyReq.setHeader('Origin', 'http://127.0.0.1:8188');
-            proxyReq.setHeader('Host', '127.0.0.1:8188');
-          });
-        }
-      },
-      '/extensions': {
-        target: 'http://127.0.0.1:8188',
-        changeOrigin: true,
-        secure: false,
-        configure: (proxy, options) => {
-          proxy.on('proxyReq', (proxyReq, req, res) => {
-            proxyReq.setHeader('Origin', 'http://127.0.0.1:8188');
-            proxyReq.setHeader('Host', '127.0.0.1:8188');
-          });
-        }
-      },
-      '/ws': {
-        target: 'ws://127.0.0.1:8188',
         ws: true,
-        changeOrigin: true,
-        secure: false,
+        router: (req) => {
+          const url = req.originalUrl || req.url
+          const match = url.match(/\/api\/v1\/comfy-proxy\/([^/]+)\/([^/]+)\/([^/]+)/)
+          if (match) {
+            const [_, protocol, host, port] = match
+            const isStd = (protocol === 'http' && port === '80') || (protocol === 'https' && port === '443')
+            return `${protocol}://${host}${isStd ? '' : `:${port}`}`
+          }
+        },
+        rewrite: (path) => path.replace(/^\/api\/v1\/comfy-proxy\/[^/]+\/[^/]+\/[^/]+/, '') || '/',
         configure: (proxy, options) => {
-          proxy.on('proxyReqWs', (proxyReq, req, socket, options, head) => {
-            proxyReq.setHeader('Origin', 'http://127.0.0.1:8188')
-            proxyReq.setHeader('Host', '127.0.0.1:8188')
+          const spoofHeaders = (proxyReq, req) => {
+            const url = req.originalUrl || req.url
+            const match = url.match(/\/api\/v1\/comfy-proxy\/([^/]+)\/([^/]+)\/([^/]+)/)
+            if (match) {
+              const [_, protocol, host, port] = match
+              const isStd = (protocol === 'http' && port === '80') || (protocol === 'https' && port === '443')
+              const tHost = isStd ? host : `${host}:${port}`
+              const tOrigin = `${protocol}://${tHost}`
+              proxyReq.setHeader('Origin', tOrigin)
+              proxyReq.setHeader('Host', tHost)
+              proxyReq.setHeader('Referer', `${tOrigin}/`)
+            }
+          }
+          proxy.on('proxyReq', spoofHeaders)
+          proxy.on('proxyReqWs', spoofHeaders)
+          proxy.on('proxyRes', (proxyRes) => {
+            const keysToDelete = ['x-frame-options', 'content-security-policy', 'access-control-allow-origin']
+            for (const key of Object.keys(proxyRes.headers)) {
+              if (keysToDelete.includes(key.toLowerCase())) delete proxyRes.headers[key]
+            }
+            proxyRes.headers['access-control-allow-origin'] = '*'
+            proxyRes.headers['access-control-allow-methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+            proxyRes.headers['access-control-allow-headers'] = '*'
+            proxyRes.headers['access-control-allow-credentials'] = 'true'
           })
         }
-      },
-    },
+      }
+    }
   },
   build: {
     outDir: 'dist',
-    // Ensure assets are relative for Electron
     assetsDir: 'assets',
-    // Generate sourcemaps for debugging (optional, can disable for production)
-    sourcemap: isElectron ? false : true,
-    // Rollup options for better chunking
+    sourcemap: !isElectron,
     rollupOptions: {
       output: {
-        // Consistent chunk naming
         chunkFileNames: 'assets/[name]-[hash].js',
         entryFileNames: 'assets/[name]-[hash].js',
         assetFileNames: 'assets/[name]-[hash].[ext]',
       },
     },
-  },
-  // Optimize deps for Electron
-  optimizeDeps: {
-    exclude: [],
-  },
+  }
 })

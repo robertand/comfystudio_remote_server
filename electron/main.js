@@ -2097,6 +2097,9 @@ ipcMain.handle('settings:set', async (event, key, value) => {
     
     settings[key] = value
     await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2))
+    if (key === COMFY_CONNECTION_SETTING_KEY || key === LAUNCHER_SETTING_KEY) {
+      await refreshLauncherConfigCache();
+    }
 
     if (key === COMFY_CONNECTION_SETTING_KEY || key === LAUNCHER_SETTING_KEY) {
       await refreshLauncherConfigCache()
@@ -2114,6 +2117,9 @@ ipcMain.handle('settings:delete', async (event, key) => {
     const settings = JSON.parse(data)
     delete settings[key]
     await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2))
+    if (key === COMFY_CONNECTION_SETTING_KEY || key === LAUNCHER_SETTING_KEY) {
+      await refreshLauncherConfigCache();
+    }
     return { success: true }
   } catch (err) {
     return { success: false, error: err.message }

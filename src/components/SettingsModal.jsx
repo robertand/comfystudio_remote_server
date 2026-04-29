@@ -335,7 +335,7 @@ function GeneralTab({ initialSection = null }) {
 
     setComfyConnectionState({
       status: 'testing',
-      message: `Testing localhost:${parsed.port}...`,
+      message: `Testing ${parsed.config.host}:${parsed.config.port}...`,
     })
 
     const testResult = await checkLocalComfyConnection({ port: parsed.port })
@@ -349,7 +349,7 @@ function GeneralTab({ initialSection = null }) {
 
     setComfyConnectionState({
       status: 'error',
-      message: testResult.error || `Could not connect to localhost:${parsed.port}.`,
+      message: testResult.error || `Could not connect to ${parsed.config.host}:${parsed.config.port}.`,
     })
   }
 
