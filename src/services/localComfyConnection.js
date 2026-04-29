@@ -52,9 +52,9 @@ function buildConnection(connection) {
 
   if (!isElectron && typeof window !== 'undefined') {
     // In web browser, use the dynamic Vite proxy to bypass CORS and iframe restrictions.
-    // Format: /comfy-proxy/{protocol-no-colon}/{host}/{port}
+    // Format: /api/v1/comfy-proxy/{protocol-no-colon}/{host}/{port}
     const protoNoColon = httpProtocol.replace(':', '')
-    const proxyPath = `/comfy-proxy/${protoNoColon}/${host}/${port}`
+    const proxyPath = `/api/v1/comfy-proxy/${protoNoColon}/${host}/${port}`
 
     // WebSocket requires an absolute URL.
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -221,6 +221,10 @@ export function getLocalComfyConnectionSync() {
   return buildConnection(cachedConnection)
 }
 
+export function getLocalComfyPortSync() {
+  return getLocalComfyConnectionSync().port
+}
+
 export function getLocalComfyHttpBaseSync() {
   return getLocalComfyConnectionSync().httpBase
 }
@@ -246,10 +250,10 @@ export async function hydrateLocalComfyConnection() {
         const stored = await window.electronAPI.getSetting(COMFY_CONNECTION_SETTING_KEY)
         let parsed = parseStoredConnectionValue(stored)
 
-        // Legacy migration path if previous versions ever stored a free-form URL key.
+        // Legacy migration path
         if (!parsed.success) {
-          const legacyUrl = await window.electronAPI.getSetting('comfyUrl')
-          parsed = parseStoredConnectionValue(legacyUrl)
+          const legacyPort = await window.electronAPI.getSetting('comfyPort')
+          parsed = parseStoredConnectionValue(legacyPort)
         }
 
         if (parsed.success && startVersion === connectionVersion) {
@@ -322,8 +326,24 @@ export async function checkLocalComfyConnection(options = {}) {
   }, timeoutMs)
 
   try {
+    const headers = {
+      'Accept': 'application/json',
+    }
+
+    // Explicitly add spoofed headers if we have a direct absolute URL
+    // (In browser it goes through proxy which does this)
+    if (config.httpBase.startsWith('http')) {
+      try {
+        const u = new URL(config.httpBase)
+        headers['Origin'] = u.origin
+        headers['Host'] = u.host
+        headers['Referer'] = u.origin + '/'
+      } catch (_) {}
+    }
+
     const response = await fetch(`${config.httpBase}/system_stats`, {
       signal: controller?.signal,
+      headers
     })
     if (response.ok) {
       return {

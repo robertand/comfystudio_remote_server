@@ -834,84 +834,34 @@ function sanitizeLocalComfyPort(value) {
   return parsed
 }
 
-function buildConnectionUrl(protocol, host, port) {
-  const httpProtocol = protocol.endsWith(':') ? protocol : `${protocol}:`
-  const isStandardPort = (httpProtocol === 'http:' && port === 80) || (httpProtocol === 'https:' && port === 443)
-  const hostPort = isStandardPort ? host : `${host}:${port}`
-  return `${httpProtocol}//${hostPort}`
-}
-
-async function resolveLocalComfyConnection() {
+async function resolveLocalComfyPort() {
   try {
     const data = await fs.readFile(settingsPath, 'utf8')
     const settings = JSON.parse(data)
     const raw = settings?.[COMFY_CONNECTION_SETTING_KEY]
-
-    let protocol = 'http:'
-    let host = '127.0.0.1'
-    let port = DEFAULT_LOCAL_COMFY_PORT
-
-    if (raw && typeof raw === 'object' && raw.host) {
-      protocol = raw.protocol || 'http:'
-      host = raw.host
-      port = sanitizeLocalComfyPort(raw.port) || DEFAULT_LOCAL_COMFY_PORT
-    } else if (typeof raw === 'string' && raw.includes('://')) {
-      try {
-        const u = new URL(raw)
-        protocol = u.protocol
-        host = u.hostname
-        port = sanitizeLocalComfyPort(u.port) || (u.protocol === 'https:' ? 443 : DEFAULT_LOCAL_COMFY_PORT)
-      } catch (e) {
-        port = sanitizeLocalComfyPort(raw) || DEFAULT_LOCAL_COMFY_PORT
-      }
-    } else {
-      port = sanitizeLocalComfyPort(raw) || DEFAULT_LOCAL_COMFY_PORT
-    }
-
-    return {
-      protocol,
-      host,
-      port,
-      httpBase: buildConnectionUrl(protocol, host, port)
-    }
+    const rawPort = raw && typeof raw === 'object' ? raw.port : raw
+    return sanitizeLocalComfyPort(rawPort) || DEFAULT_LOCAL_COMFY_PORT
   } catch {
-    return {
-      protocol: 'http:',
-      host: '127.0.0.1',
-      port: DEFAULT_LOCAL_COMFY_PORT,
-      httpBase: buildConnectionUrl('http:', '127.0.0.1', DEFAULT_LOCAL_COMFY_PORT)
-    }
+    return DEFAULT_LOCAL_COMFY_PORT
   }
 }
 
-async function checkComfyUIRunning() {
-  const connection = await resolveLocalComfyConnection()
-  const healthUrl = `${connection.httpBase}/system_stats`
-
-  try {
-    const u = new URL(connection.httpBase)
-    const response = await net.fetch(healthUrl, {
-      method: 'GET',
-      headers: {
-        'Origin': u.origin,
-        'Host': u.host,
-        'Referer': `${u.origin}/`
-      }
+async function checkComfyUIRunning(portOverride = null) {
+  const port = sanitizeLocalComfyPort(portOverride) || await resolveLocalComfyPort()
+  const healthUrl = `http://127.0.0.1:${port}/system_stats`
+  return new Promise((resolve) => {
+    const req = http.get(healthUrl, (res) => {
+      resolve({
+        ok: res.statusCode === 200 || (res.statusCode >= 200 && res.statusCode < 400),
+        port,
+      })
     })
-    return {
-      ok: response.ok,
-      status: response.status,
-      port: connection.port,
-      httpBase: connection.httpBase
-    }
-  } catch (error) {
-    return {
-      ok: false,
-      port: connection.port,
-      httpBase: connection.httpBase,
-      error: error.message
-    }
-  }
+    req.on('error', () => resolve({ ok: false, port }))
+    req.setTimeout(COMFYUI_CHECK_MS, () => {
+      req.destroy()
+      resolve({ ok: false, port })
+    })
+  })
 }
 
 // ============================================
@@ -922,7 +872,6 @@ const COMFY_ROOT_SETTING_KEY = 'comfyRootPath'
 const launcherLogDir = path.join(app.getPath('userData'), 'logs')
 let cachedLauncherConfig = safeCloneLauncherConfig(DEFAULT_LAUNCHER_CONFIG)
 let cachedHttpBase = `http://127.0.0.1:${DEFAULT_LOCAL_COMFY_PORT}`
-let cachedComfyHost = '127.0.0.1'
 let launcherQuitConfirmed = false
 
 async function readSettingsRaw() {
@@ -944,11 +893,11 @@ async function writeSettingsRaw(mutator) {
 async function refreshLauncherConfigCache() {
   const settings = await readSettingsRaw()
   cachedLauncherConfig = safeCloneLauncherConfig(settings?.[LAUNCHER_SETTING_KEY])
-
-  const connection = await resolveLocalComfyConnection()
-  cachedHttpBase = connection.httpBase
-  cachedComfyHost = connection.host
-
+  const port = sanitizeLocalComfyPort(
+    settings?.[COMFY_CONNECTION_SETTING_KEY]?.port
+    ?? settings?.[COMFY_CONNECTION_SETTING_KEY]
+  ) || DEFAULT_LOCAL_COMFY_PORT
+  cachedHttpBase = `http://127.0.0.1:${port}`
   return { config: cachedLauncherConfig, httpBase: cachedHttpBase, comfyRootPath: settings?.[COMFY_ROOT_SETTING_KEY] || '' }
 }
 
@@ -1010,13 +959,13 @@ async function runStartupChecks() {
   const start = Date.now()
   if (!splashWindow || splashWindow.isDestroyed()) return
 
-  const connection = await resolveLocalComfyConnection()
-  setSplashStatus(`Checking ComfyUI on ${connection.host}:${connection.port}…`)
-  const comfyCheck = await checkComfyUIRunning()
+  const comfyPort = await resolveLocalComfyPort()
+  setSplashStatus(`Checking ComfyUI on localhost:${comfyPort}…`)
+  const comfyCheck = await checkComfyUIRunning(comfyPort)
   if (comfyCheck.ok) {
-    setSplashStatus(`ComfyUI connected (${connection.host}:${connection.port})`)
+    setSplashStatus(`ComfyUI connected (localhost:${comfyCheck.port})`)
   } else {
-    setSplashStatus(`ComfyUI not detected on ${connection.host}:${connection.port}`)
+    setSplashStatus(`ComfyUI not detected on localhost:${comfyCheck.port}`)
   }
   await delay(STEP_DELAY_MS)
 
@@ -2087,12 +2036,6 @@ ipcMain.handle('settings:set', async (event, key, value) => {
     
     settings[key] = value
     await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2))
-
-    // Refresh internal caches if connection or launcher settings change
-    if (key === COMFY_CONNECTION_SETTING_KEY || key === LAUNCHER_SETTING_KEY) {
-      await refreshLauncherConfigCache()
-    }
-
     return { success: true }
   } catch (err) {
     return { success: false, error: err.message }
@@ -2105,11 +2048,6 @@ ipcMain.handle('settings:delete', async (event, key) => {
     const settings = JSON.parse(data)
     delete settings[key]
     await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2))
-
-    if (key === COMFY_CONNECTION_SETTING_KEY || key === LAUNCHER_SETTING_KEY) {
-      await refreshLauncherConfigCache()
-    }
-
     return { success: true }
   } catch (err) {
     return { success: false, error: err.message }
@@ -3168,80 +3106,6 @@ ipcMain.handle('export:checkNvenc', async () => {
 
 app.whenReady().then(() => {
   registerFileProtocol()
-
-  // Spoof Origin and Host headers for ComfyUI requests to avoid 403 Forbidden errors.
-  // This is necessary when connecting to remote ComfyUI instances or through tunnels.
-  const { session } = require('electron')
-  const isComfyRequest = (url) => {
-    if (!url) return false
-    const u = url.toLowerCase()
-
-    // Always include requests to our configured base
-    if (cachedHttpBase && u.startsWith(cachedHttpBase.toLowerCase())) return true
-    // Handle proxy path
-    if (u.includes('/comfy-proxy/')) return true
-
-    // Check for common ComfyUI paths to catch "Test Connection" calls to new addresses
-    const comfyPaths = ['/system_stats', '/prompt', '/history', '/queue', '/interrupt', '/view', '/upload', '/ws', '/object_info']
-    try {
-      const parsed = new URL(url)
-      if (comfyPaths.some(p => parsed.pathname.startsWith(p))) return true
-    } catch (_) {}
-
-    return false
-  }
-
-  session.defaultSession.webRequest.onBeforeSendHeaders(
-    { urls: ['*://*/*'] },
-    (details, callback) => {
-      const url = details.url
-
-      if (isComfyRequest(url)) {
-        try {
-          const targetUrl = new URL(url)
-          // Spoof Origin and Host to match the target itself.
-          // This bypasses ComfyUI's origin_only_middleware.
-          // 'extraHeaders' is needed in the listener options to modify Origin/Referer.
-          details.requestHeaders['Origin'] = targetUrl.origin
-          details.requestHeaders['Host'] = targetUrl.host
-          details.requestHeaders['Referer'] = targetUrl.origin + '/'
-        } catch (_) {}
-      }
-      callback({ requestHeaders: details.requestHeaders })
-    },
-    ['requestHeaders', 'extraHeaders']
-  )
-
-  // Strip restrictive headers and add CORS headers to allow renderer to access remote ComfyUI.
-  session.defaultSession.webRequest.onHeadersReceived(
-    { urls: ['*://*/*'] },
-    (details, callback) => {
-      const url = details.url
-
-      if (isComfyRequest(url)) {
-        const responseHeaders = details.responseHeaders
-
-        // Allow iframe embedding
-        const keysToDelete = ['x-frame-options', 'content-security-policy']
-        for (const key of Object.keys(responseHeaders)) {
-          if (keysToDelete.includes(key.toLowerCase())) {
-            delete responseHeaders[key]
-          }
-        }
-
-        // Enable CORS for the renderer
-        responseHeaders['Access-Control-Allow-Origin'] = ['*']
-        responseHeaders['Access-Control-Allow-Methods'] = ['GET, POST, PUT, DELETE, OPTIONS']
-        responseHeaders['Access-Control-Allow-Headers'] = ['*']
-
-        callback({ cancel: false, responseHeaders })
-      } else {
-        callback({ cancel: false, responseHeaders: details.responseHeaders })
-      }
-    },
-    ['responseHeaders', 'extraHeaders']
-  )
-
   initComfyLauncher()
     .then(() => maybeAutoStartComfyLauncher())
     .catch((error) => {
@@ -3309,29 +3173,6 @@ app.on('before-quit', async (event) => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
-  }
-})
-
-// Handle self-signed certificates for local HTTPS ComfyUI servers
-app.on('certificate-error', (event, webContents, url, error, certificate, callback) => {
-  // Only bypass for localhost/loopback or if the url matches the configured ComfyUI server.
-  const isLocal = url.startsWith('https://127.0.0.1') || url.startsWith('https://localhost')
-
-  let isConfiguredRemote = false
-  if (cachedComfyHost && cachedComfyHost !== '127.0.0.1' && cachedComfyHost !== 'localhost') {
-    try {
-      const u = new URL(url)
-      if (u.hostname === cachedComfyHost) {
-        isConfiguredRemote = true
-      }
-    } catch (_) {}
-  }
-
-  if (isLocal || isConfiguredRemote) {
-    event.preventDefault()
-    callback(true)
-  } else {
-    callback(false)
   }
 })
 

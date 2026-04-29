@@ -351,7 +351,7 @@ function ComfyLauncherSettingsSection({ onOpenLogViewer }) {
       <div className="flex items-start gap-2 text-[11px] text-sf-text-muted">
         <Info className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
         <div>
-          ComfyStudio talks to ComfyUI on <code className="px-1 rounded bg-sf-dark-800">{state.httpBase || 'http://127.0.0.1:8188'}</code>. Change the address in
+          ComfyStudio talks to ComfyUI on <code className="px-1 rounded bg-sf-dark-800">{state.httpBase || 'http://127.0.0.1:8188'}</code>. Change the port in
           <span className="mx-1 inline-flex items-center gap-1">
             <strong>ComfyUI Connection</strong>
           </span>
