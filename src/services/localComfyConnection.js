@@ -267,32 +267,62 @@ export const saveLocalComfyConnectionPort = saveComfyConnection
 export async function checkLocalComfyConnection(options = {}) {
   const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 4500
   let config = options.config ? buildConnection(options.config) : getLocalComfyConnectionSync()
-
-  // Ensure we don't have double slashes at the end for the fetch call
   const normalizedBase = config.httpBase.replace(/\/+$/, '')
 
+  // Folosește API-ul Electron pentru a adăuga antetele corecte
+  const isElectron = typeof window !== 'undefined' && (
+    !!window?.electronAPI?.isElectron ||
+    /electron/i.test(navigator.userAgent)
+  )
+
+  if (isElectron && window.electronAPI?.fetchWithHeaders) {
+    // Dacă există un handler special în preload, folosește-l
+    try {
+      const result = await window.electronAPI.fetchWithHeaders(`${normalizedBase}/system_stats`, {
+        method: 'GET',
+        timeout: timeoutMs
+      })
+      if (result.ok) {
+        return { ok: true, status: result.status, httpBase: config.httpBase }
+      }
+
+      let errorDetail = ''
+      if (result.data) {
+        if (result.data.includes('<html') || result.data.includes('<!DOCTYPE')) {
+          errorDetail = 'Server returned an HTML page instead of JSON. This often means the request was blocked by a firewall (like Cloudflare) or a proxy.'
+        } else {
+          errorDetail = result.data.slice(0, 200)
+        }
+      }
+
+      return {
+        ok: false,
+        status: result.status,
+        error: `ComfyUI returned HTTP ${result.status}${errorDetail ? `: ${errorDetail}` : ''}`
+      }
+    } catch (err) {
+      return { ok: false, error: `Could not connect to ${config.httpBase}: ${err.message}` }
+    }
+  }
+
+  // Fallback pentru browser (folosește fetch normal)
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
   const timer = setTimeout(() => controller?.abort(), timeoutMs)
 
   try {
-    const headers = { 'Accept': 'application/json' }
-    if (config.httpBase.startsWith('http')) {
-      try {
-        const u = new URL(config.httpBase)
-        headers['Origin'] = u.origin
-        headers['Host'] = u.host
-        headers['Referer'] = u.origin + '/'
-
-        // Match enhanced spoofing logic
-        headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        headers['Accept'] = 'application/json'
-        headers['Accept-Language'] = 'en-US,en;q=0.9'
-      } catch {}
+    const headers = {
+      'Accept': 'application/json',
+      'Origin': new URL(config.httpBase).origin,
+      'Host': new URL(config.httpBase).host,
+      'Referer': config.httpBase,
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
 
     const response = await fetch(`${normalizedBase}/system_stats`, {
       signal: controller?.signal,
-      headers
+      headers,
+      mode: 'cors',
+      credentials: 'omit'
     })
 
     if (response.ok) {
@@ -302,7 +332,6 @@ export async function checkLocalComfyConnection(options = {}) {
     let errorDetail = ''
     try {
       const text = await response.text()
-      // If it looks like HTML, it might be a Cloudflare block page
       if (text.includes('<html') || text.includes('<!DOCTYPE')) {
         errorDetail = 'Server returned an HTML page instead of JSON. This often means the request was blocked by a firewall (like Cloudflare) or a proxy.'
       } else {

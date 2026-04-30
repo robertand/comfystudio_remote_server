@@ -894,6 +894,55 @@ async function resolveLocalComfyConnection() {
   }
 }
 
+// ============================================
+// IPC Handlers - Advanced Networking (ComfyUI)
+// ============================================
+
+ipcMain.handle('comfy:fetch', async (event, url, options = {}) => {
+  try {
+    const u = new URL(url)
+    const fetchOptions = {
+      method: options.method || 'GET',
+      headers: {
+        'Origin': u.origin,
+        'Host': u.host,
+        'Referer': u.origin + '/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json'
+      }
+    }
+
+    // Add timeout support if specified
+    const controller = new AbortController()
+    let timeoutId = null
+    if (options.timeout) {
+      fetchOptions.signal = controller.signal
+      timeoutId = setTimeout(() => controller.abort(), options.timeout)
+    }
+
+    const response = await net.fetch(url, fetchOptions)
+    if (timeoutId) clearTimeout(timeoutId)
+
+    let data = ''
+    try {
+      data = await response.text()
+    } catch (_) {}
+
+    return {
+      ok: response.ok,
+      status: response.status,
+      data: data
+    }
+  } catch (error) {
+    // Return a structured error instead of throwing to avoid IPC noise
+    return {
+      ok: false,
+      status: 0,
+      error: error.name === 'AbortError' ? 'Request timeout' : error.message
+    }
+  }
+})
+
 async function checkComfyUIRunning() {
   const connection = await resolveLocalComfyConnection()
   const healthUrl = `${connection.httpBase}/system_stats`
