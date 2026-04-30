@@ -900,13 +900,21 @@ async function resolveLocalComfyConnection() {
 
 ipcMain.handle('comfy:fetch', async (event, url, options = {}) => {
   try {
-    const u = new URL(url)
+    // Treat Electron requests to comfy-test protocol as internal bypass
+    const isBypass = url.startsWith('comfy-test://')
+    let targetUrl = url
+    if (isBypass) {
+      const u = new URL(url)
+      targetUrl = u.searchParams.get('url')
+    }
+
+    const target = new URL(targetUrl)
     const fetchOptions = {
       method: options.method || 'GET',
       headers: {
-        'Origin': u.origin,
-        'Host': u.host,
-        'Referer': u.origin + '/',
+        'Origin': target.origin,
+        'Host': target.host,
+        'Referer': target.origin + '/',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'application/json'
       }
@@ -920,7 +928,7 @@ ipcMain.handle('comfy:fetch', async (event, url, options = {}) => {
       timeoutId = setTimeout(() => controller.abort(), options.timeout)
     }
 
-    const response = await net.fetch(url, fetchOptions)
+    const response = await net.fetch(targetUrl, fetchOptions)
     if (timeoutId) clearTimeout(timeoutId)
 
     let data = ''
@@ -945,8 +953,29 @@ ipcMain.handle('comfy:fetch', async (event, url, options = {}) => {
 
 async function checkComfyUIRunning() {
   const connection = await resolveLocalComfyConnection()
-  const healthUrl = `${connection.httpBase}/system_stats`
+  const isRemote = connection.host !== '127.0.0.1' && connection.host !== 'localhost'
 
+  if (isRemote) {
+    const testUrl = `comfy-test://test?url=${encodeURIComponent(`${connection.httpBase}/system_stats`)}`
+    try {
+      const response = await net.fetch(testUrl)
+      return {
+        ok: response.ok,
+        status: response.status,
+        port: connection.port,
+        httpBase: connection.httpBase
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        port: connection.port,
+        httpBase: connection.httpBase,
+        error: error.message
+      }
+    }
+  }
+
+  const healthUrl = `${connection.httpBase}/system_stats`
   try {
     const u = new URL(connection.httpBase)
     const response = await net.fetch(healthUrl, {
@@ -1164,6 +1193,40 @@ function registerFileProtocol() {
     } catch (err) {
       console.error('Protocol error:', err)
       return new Response('File not found', { status: 404 })
+    }
+  })
+
+  // Handler special pentru testarea conexiunii ComfyUI remote
+  protocol.handle('comfy-test', async (request) => {
+    try {
+      const url = new URL(request.url)
+      const targetUrl = url.searchParams.get('url')
+      if (!targetUrl) {
+        return new Response('Missing url parameter', { status: 400 })
+      }
+
+      const target = new URL(targetUrl)
+      const response = await net.fetch(targetUrl, {
+        method: 'GET',
+        headers: {
+          'Origin': target.origin,
+          'Host': target.host,
+          'Referer': target.origin + '/',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'application/json'
+        }
+      })
+
+      const body = await response.text()
+      return new Response(body, {
+        status: response.status,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        }
+      })
+    } catch (error) {
+      return new Response(error.message, { status: 500 })
     }
   })
 }

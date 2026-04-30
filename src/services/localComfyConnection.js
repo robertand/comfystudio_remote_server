@@ -267,18 +267,30 @@ export const saveLocalComfyConnectionPort = saveComfyConnection
 export async function checkLocalComfyConnection(options = {}) {
   const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 4500
   let config = options.config ? buildConnection(options.config) : getLocalComfyConnectionSync()
-  const normalizedBase = config.httpBase.replace(/\/+$/, '')
 
-  // Folosește API-ul Electron pentru a adăuga antetele corecte
+  // Folosește proxy-ul intern pentru conexiuni remote
+  const isRemote = config.host !== '127.0.0.1' && config.host !== 'localhost'
+
   const isElectron = typeof window !== 'undefined' && (
     !!window?.electronAPI?.isElectron ||
     /electron/i.test(navigator.userAgent)
   )
 
+  let testUrl
+  if (isRemote && !isElectron && typeof window !== 'undefined' && window.location.origin) {
+    // Folosește proxy-ul intern pentru a ocoli CORS în browser
+    const protocolNoColon = config.protocol.replace(':', '')
+    testUrl = `${window.location.origin}/api/v1/comfy-proxy/${protocolNoColon}/${config.host}/${config.port}/system_stats`
+  } else {
+    testUrl = `${config.httpBase.replace(/\/+$/, '')}/system_stats`
+  }
+
+  // În Electron, forțăm cererea prin protocolul custom 'comfy-test' sau folosim fetchWithHeaders
+  // Ambele trec prin procesul Main care ocolește CORS-ul rendererului.
   if (isElectron && window.electronAPI?.fetchWithHeaders) {
-    // Dacă există un handler special în preload, folosește-l
     try {
-      const result = await window.electronAPI.fetchWithHeaders(`${normalizedBase}/system_stats`, {
+      const finalTestUrl = isRemote ? `comfy-test://test?url=${encodeURIComponent(testUrl)}` : testUrl
+      const result = await window.electronAPI.fetchWithHeaders(finalTestUrl, {
         method: 'GET',
         timeout: timeoutMs
       })
@@ -305,23 +317,27 @@ export async function checkLocalComfyConnection(options = {}) {
     }
   }
 
-  // Fallback pentru browser (folosește fetch normal)
+  // Fallback pentru browser sau dacă fetchWithHeaders lipsește
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
   const timer = setTimeout(() => controller?.abort(), timeoutMs)
 
   try {
     const headers = {
-      'Accept': 'application/json',
-      'Origin': new URL(config.httpBase).origin,
-      'Host': new URL(config.httpBase).host,
-      'Referer': config.httpBase,
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      'Accept': 'application/json'
     }
 
-    const response = await fetch(`${normalizedBase}/system_stats`, {
+    // Doar pentru cereri directe adăugăm antetele speciale (proxy-ul le adaugă oricum)
+    if (!testUrl.includes('/api/v1/comfy-proxy/')) {
+      headers['Origin'] = new URL(config.httpBase).origin
+      headers['Host'] = new URL(config.httpBase).host
+      headers['Referer'] = config.httpBase
+      headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+
+    const response = await fetch(testUrl, {
       signal: controller?.signal,
       headers,
-      mode: 'cors',
+      mode: testUrl.includes(window.location.origin) ? 'same-origin' : 'cors',
       credentials: 'omit'
     })
 
