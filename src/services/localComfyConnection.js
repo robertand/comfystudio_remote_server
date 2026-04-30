@@ -37,7 +37,7 @@ function isLoopbackHost(hostname) {
 function buildConnection(connection) {
   const protocol = connection?.protocol || 'http:'
   const host = connection?.host || LOCAL_COMFY_HOST
-  const port = normalizePort(connection?.port) || DEFAULT_COMFY_PORT
+  const port = normalizePort(connection?.port) || (protocol === 'https:' ? 443 : DEFAULT_COMFY_PORT)
 
   const httpProtocol = protocol.endsWith(':') ? protocol : `${protocol}:`
   const isStandardPort = (httpProtocol === 'http:' && port === 80) || (httpProtocol === 'https:' && port === 443)
@@ -50,9 +50,10 @@ function buildConnection(connection) {
 
   if (!isElectron && typeof window !== 'undefined') {
     const protoNoColon = httpProtocol.replace(':', '')
-    const proxyPath = `/api/v1/comfy-proxy/${protoNoColon}/${host}/${port}`
+    // The proxy expects /protocol/host/port. If port is omitted in the URL, it should be passed explicitly.
+    const proxyPath = `/api/v1/comfy-proxy/${protoNoColon}/${host}/${port}/`
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsBase = `${wsProtocol}//${window.location.host}${proxyPath}`
+    const wsBase = `${wsProtocol}//${window.location.host}${proxyPath}ws`
 
     return {
       protocol: httpProtocol,
@@ -67,8 +68,8 @@ function buildConnection(connection) {
     protocol: httpProtocol,
     host,
     port,
-    httpBase: `${httpProtocol}//${hostPort}`,
-    wsBase: `${httpProtocol === 'https:' ? 'wss:' : 'ws:'}//${hostPort}`,
+    httpBase: `${httpProtocol}//${hostPort}/`,
+    wsBase: `${httpProtocol === 'https:' ? 'wss:' : 'ws:'}//${hostPort}/`,
   }
 }
 
@@ -240,7 +241,7 @@ export async function hydrateLocalComfyConnection() {
   return hydrationPromise
 }
 
-export async function saveLocalComfyConnectionPort(input) {
+export async function saveComfyConnection(input) {
   const parsed = parseLocalComfyPortInput(input)
   if (!parsed.success) return { success: false, error: parsed.error }
 
@@ -261,11 +262,14 @@ export async function saveLocalComfyConnectionPort(input) {
   return { success: true, config }
 }
 
-export const saveComfyConnection = saveLocalComfyConnectionPort
+export const saveLocalComfyConnectionPort = saveComfyConnection
 
 export async function checkLocalComfyConnection(options = {}) {
   const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 4500
   let config = options.config ? buildConnection(options.config) : getLocalComfyConnectionSync()
+
+  // Ensure we don't have double slashes at the end for the fetch call
+  const normalizedBase = config.httpBase.replace(/\/+$/, '')
 
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
   const timer = setTimeout(() => controller?.abort(), timeoutMs)
@@ -286,7 +290,7 @@ export async function checkLocalComfyConnection(options = {}) {
       } catch {}
     }
 
-    const response = await fetch(`${config.httpBase}/system_stats`, {
+    const response = await fetch(`${normalizedBase}/system_stats`, {
       signal: controller?.signal,
       headers
     })

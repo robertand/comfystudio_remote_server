@@ -14,7 +14,7 @@ export default defineConfig({
     port: 5173,
     allowedHosts: true,
     proxy: {
-      '^/api/v1/comfy-proxy/([^/]+)/([^/]+)/([^/]+)/?': {
+      '^/api/v1/comfy-proxy/([^/]+)/([^/]+)/([^/]+)/?.*': {
         target: 'http://127.0.0.1:8188',
         changeOrigin: true,
         secure: false,
@@ -24,7 +24,8 @@ export default defineConfig({
           const match = url.match(/\/api\/v1\/comfy-proxy\/([^/]+)\/([^/]+)\/([^/]+)/)
           if (match) {
             const [_, protocol, host, port] = match
-            const isStd = (protocol === 'http' && port === '80') || (protocol === 'https' && port === '443')
+            const p = parseInt(port, 10)
+            const isStd = (protocol === 'http' && p === 80) || (protocol === 'https' && p === 443)
             return `${protocol}://${host}${isStd ? '' : `:${port}`}`
           }
         },
@@ -35,7 +36,8 @@ export default defineConfig({
             const match = url.match(/\/api\/v1\/comfy-proxy\/([^/]+)\/([^/]+)\/([^/]+)/)
             if (match) {
               const [_, protocol, host, port] = match
-              const isStd = (protocol === 'http' && port === '80') || (protocol === 'https' && port === '443')
+              const p = parseInt(port, 10)
+              const isStd = (protocol === 'http' && p === 80) || (protocol === 'https' && p === 443)
               const tHost = isStd ? host : `${host}:${port}`
               const tOrigin = `${protocol}://${tHost}`
               proxyReq.setHeader('Origin', tOrigin)
@@ -66,6 +68,10 @@ export default defineConfig({
             proxyRes.headers['access-control-allow-methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
             proxyRes.headers['access-control-allow-headers'] = '*'
             proxyRes.headers['access-control-allow-credentials'] = 'true'
+
+            // Adopt reference app "ALLOWALL" strategy for dev proxy too
+            proxyRes.headers['x-frame-options'] = 'ALLOWALL'
+            proxyRes.headers['content-security-policy'] = "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:;"
           })
         }
       }

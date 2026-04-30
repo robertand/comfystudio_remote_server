@@ -3278,11 +3278,15 @@ app.whenReady().then(() => {
           }
         }
 
-        // Force permissive CORS
+        // Force permissive headers for iframe embedding and CORS
         responseHeaders['access-control-allow-origin'] = ['*']
         responseHeaders['access-control-allow-methods'] = ['GET, POST, PUT, DELETE, OPTIONS']
         responseHeaders['access-control-allow-headers'] = ['*']
         responseHeaders['access-control-allow-credentials'] = ['true']
+
+        // Adopt reference app "ALLOWALL" strategy
+        responseHeaders['X-Frame-Options'] = ['ALLOWALL']
+        responseHeaders['Content-Security-Policy'] = ["default-src * 'unsafe-inline' 'unsafe-eval' data: blob:;"]
 
         callback({ cancel: false, responseHeaders })
       } else {

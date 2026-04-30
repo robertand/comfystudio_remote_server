@@ -315,7 +315,8 @@ function GeneralTab({ initialSection = null }) {
       return false
     }
 
-    setComfyAddressInput(String(result.config.port))
+    // Keep the full URL/address in the input if that's what was entered
+    setComfyAddressInput(comfyAddressInput)
     setComfyConnectionState({
       status: 'idle',
       message: `Saved local endpoint: ${result.config.httpBase}`,
@@ -338,7 +339,7 @@ function GeneralTab({ initialSection = null }) {
       message: `Testing ${parsed.config.host}:${parsed.config.port}...`,
     })
 
-    const testResult = await checkLocalComfyConnection({ port: parsed.port })
+    const testResult = await checkLocalComfyConnection({ config: parsed.config })
     if (testResult.ok) {
       setComfyConnectionState({
         status: 'success',

@@ -87,7 +87,7 @@ function SettingsPanel() {
       })
       return false
     }
-    setComfyAddressInput(String(result.config.port))
+    setComfyAddressInput(comfyAddressInput)
     setComfyConnectionState({
       status: 'idle',
       message: `Saved local endpoint: ${result.config.httpBase}`,
@@ -108,7 +108,7 @@ function SettingsPanel() {
       status: 'testing',
       message: `Testing ${parsed.config.host}:${parsed.config.port}...`,
     })
-    const testResult = await checkLocalComfyConnection({ port: parsed.port })
+    const testResult = await checkLocalComfyConnection({ config: parsed.config })
     if (testResult.ok) {
       setComfyConnectionState({
         status: 'success',
