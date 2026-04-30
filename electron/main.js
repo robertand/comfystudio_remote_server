@@ -1020,13 +1020,13 @@ async function runStartupChecks() {
   const start = Date.now()
   if (!splashWindow || splashWindow.isDestroyed()) return
 
-  const comfyPort = await resolveLocalComfyPort()
-  setSplashStatus(`Checking ComfyUI on localhost:${comfyPort}…`)
-  const comfyCheck = await checkComfyUIRunning(comfyPort)
+  const connection = await resolveLocalComfyConnection()
+  setSplashStatus(`Checking ComfyUI on ${connection.host}:${connection.port}…`)
+  const comfyCheck = await checkComfyUIRunning()
   if (comfyCheck.ok) {
-    setSplashStatus(`ComfyUI connected (localhost:${comfyCheck.port})`)
+    setSplashStatus(`ComfyUI connected (${comfyCheck.httpBase})`)
   } else {
-    setSplashStatus(`ComfyUI not detected on localhost:${comfyCheck.port}`)
+    setSplashStatus(`ComfyUI not detected on ${comfyCheck.httpBase}`)
   }
   await delay(STEP_DELAY_MS)
 
@@ -2097,10 +2097,6 @@ ipcMain.handle('settings:set', async (event, key, value) => {
     
     settings[key] = value
     await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2))
-    if (key === COMFY_CONNECTION_SETTING_KEY || key === LAUNCHER_SETTING_KEY) {
-      await refreshLauncherConfigCache();
-    }
-
     if (key === COMFY_CONNECTION_SETTING_KEY || key === LAUNCHER_SETTING_KEY) {
       await refreshLauncherConfigCache()
     }
@@ -3185,14 +3181,28 @@ app.whenReady().then(() => {
   const isComfyRequest = (url) => {
     if (!url) return false
     const u = url.toLowerCase()
+
+    // 1. Direct match with current configured base URL
     if (cachedHttpBase && u.startsWith(cachedHttpBase.toLowerCase())) return true
+
+    // 2. Match with current configured host (catch assets, websockets, etc.)
+    if (cachedComfyHost) {
+      try {
+        const parsed = new URL(url)
+        if (parsed.hostname.toLowerCase() === cachedComfyHost.toLowerCase()) return true
+      } catch (_) {}
+    }
+
+    // 3. Match with internal Vite proxy pattern
     if (u.includes('/api/v1/comfy-proxy/')) return true
+
+    // 4. Match with common ComfyUI API paths (fallback)
     const comfyPaths = ['/system_stats', '/prompt', '/history', '/queue', '/interrupt', '/view', '/upload', '/ws', '/object_info']
     try {
       const parsed = new URL(url)
       if (comfyPaths.some(p => parsed.pathname.startsWith(p))) return true
-      if (comfyPaths.some(p => parsed.pathname.endsWith(p))) return true
     } catch (_) {}
+
     return false
   }
 
@@ -3201,7 +3211,7 @@ app.whenReady().then(() => {
     (details, callback) => {
       if (isComfyRequest(details.url)) {
         try {
-          let tOrigin, tHost
+          let tOrigin, tHost, tProtocol
           const proxyMatch = details.url.match(/\/api\/v1\/comfy-proxy\/([^/]+)\/([^/]+)\/([^/]+)/)
           if (proxyMatch) {
             const [_, protocol, host, port] = proxyMatch
@@ -3209,14 +3219,36 @@ app.whenReady().then(() => {
             const isStandard = (protocol === 'http' && p === 80) || (protocol === 'https' && p === 443)
             tHost = isStandard ? host : `${host}:${port}`
             tOrigin = `${protocol}://${tHost}`
+            tProtocol = protocol
           } else {
             const u = new URL(details.url)
             tOrigin = u.origin
             tHost = u.host
+            tProtocol = u.protocol.replace(':', '')
           }
+
+          // Basic spoofing
           details.requestHeaders['Origin'] = tOrigin
           details.requestHeaders['Host'] = tHost
           details.requestHeaders['Referer'] = tOrigin + '/'
+
+          // Modern browser spoofing to bypass Cloudflare/WAF
+          details.requestHeaders['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          details.requestHeaders['Accept'] = '*/*'
+          details.requestHeaders['Accept-Language'] = 'en-US,en;q=0.9'
+
+          // Sec-Fetch headers are critical for modern site isolation policies
+          if (details.resourceType === 'mainFrame' || details.resourceType === 'subFrame') {
+            details.requestHeaders['Sec-Fetch-Dest'] = 'iframe'
+            details.requestHeaders['Sec-Fetch-Mode'] = 'navigate'
+            details.requestHeaders['Sec-Fetch-Site'] = 'cross-site'
+          } else if (details.url.includes('/ws')) {
+             // WebSockets often don't need specific sec-fetch but let's keep them clean
+          } else {
+            details.requestHeaders['Sec-Fetch-Dest'] = 'empty'
+            details.requestHeaders['Sec-Fetch-Mode'] = 'cors'
+            details.requestHeaders['Sec-Fetch-Site'] = 'cross-site'
+          }
         } catch (_) {}
       }
       callback({ requestHeaders: details.requestHeaders })
@@ -3229,16 +3261,29 @@ app.whenReady().then(() => {
     (details, callback) => {
       if (isComfyRequest(details.url)) {
         const responseHeaders = details.responseHeaders
-        const keysToDelete = ['x-frame-options', 'content-security-policy', 'access-control-allow-origin']
+
+        // Headers that prevent iframe embedding or cross-origin access
+        const keysToDelete = [
+          'x-frame-options',
+          'content-security-policy',
+          'access-control-allow-origin',
+          'cross-origin-resource-policy',
+          'cross-origin-opener-policy',
+          'cross-origin-embedder-policy'
+        ]
+
         for (const key of Object.keys(responseHeaders)) {
           if (keysToDelete.includes(key.toLowerCase())) {
             delete responseHeaders[key]
           }
         }
+
+        // Force permissive CORS
         responseHeaders['access-control-allow-origin'] = ['*']
         responseHeaders['access-control-allow-methods'] = ['GET, POST, PUT, DELETE, OPTIONS']
         responseHeaders['access-control-allow-headers'] = ['*']
         responseHeaders['access-control-allow-credentials'] = ['true']
+
         callback({ cancel: false, responseHeaders })
       } else {
         callback({ cancel: false, responseHeaders: details.responseHeaders })

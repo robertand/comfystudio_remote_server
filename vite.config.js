@@ -41,12 +41,24 @@ export default defineConfig({
               proxyReq.setHeader('Origin', tOrigin)
               proxyReq.setHeader('Host', tHost)
               proxyReq.setHeader('Referer', `${tOrigin}/`)
+
+              // Mirror Electron modern browser spoofing
+              proxyReq.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+              proxyReq.setHeader('Accept', '*/*')
+              proxyReq.setHeader('Accept-Language', 'en-US,en;q=0.9')
             }
           }
           proxy.on('proxyReq', spoofHeaders)
           proxy.on('proxyReqWs', spoofHeaders)
           proxy.on('proxyRes', (proxyRes) => {
-            const keysToDelete = ['x-frame-options', 'content-security-policy', 'access-control-allow-origin']
+            const keysToDelete = [
+              'x-frame-options',
+              'content-security-policy',
+              'access-control-allow-origin',
+              'cross-origin-resource-policy',
+              'cross-origin-opener-policy',
+              'cross-origin-embedder-policy'
+            ]
             for (const key of Object.keys(proxyRes.headers)) {
               if (keysToDelete.includes(key.toLowerCase())) delete proxyRes.headers[key]
             }

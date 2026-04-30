@@ -278,6 +278,11 @@ export async function checkLocalComfyConnection(options = {}) {
         headers['Origin'] = u.origin
         headers['Host'] = u.host
         headers['Referer'] = u.origin + '/'
+
+        // Match enhanced spoofing logic
+        headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        headers['Accept'] = 'application/json'
+        headers['Accept-Language'] = 'en-US,en;q=0.9'
       } catch {}
     }
 
@@ -291,12 +296,20 @@ export async function checkLocalComfyConnection(options = {}) {
     }
 
     let errorDetail = ''
-    try { errorDetail = await response.text() } catch {}
+    try {
+      const text = await response.text()
+      // If it looks like HTML, it might be a Cloudflare block page
+      if (text.includes('<html') || text.includes('<!DOCTYPE')) {
+        errorDetail = 'Server returned an HTML page instead of JSON. This often means the request was blocked by a firewall (like Cloudflare) or a proxy.'
+      } else {
+        errorDetail = text.slice(0, 200)
+      }
+    } catch {}
 
     return {
       ok: false,
       status: response.status,
-      error: `ComfyUI returned HTTP ${response.status}${errorDetail ? `: ${errorDetail.slice(0, 100)}` : ''}`
+      error: `ComfyUI returned HTTP ${response.status}${errorDetail ? `: ${errorDetail}` : ''}`
     }
   } catch (err) {
     return { ok: false, error: `Could not connect to ${config.httpBase}: ${err.message}` }
