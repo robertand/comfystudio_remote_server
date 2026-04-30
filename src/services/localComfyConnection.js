@@ -43,10 +43,10 @@ function buildConnection(connection) {
   const isStandardPort = (httpProtocol === 'http:' && port === 80) || (httpProtocol === 'https:' && port === 443)
   const hostPort = isStandardPort ? host : `${host}:${port}`
 
-  const isElectron = typeof window !== 'undefined' && (
-    !!window?.electronAPI?.isElectron ||
-    /electron/i.test(navigator.userAgent)
-  )
+  const isElectron = !!(typeof window !== 'undefined' &&
+    (window.process?.type === 'renderer' ||
+     window.navigator?.userAgent?.includes('Electron') ||
+     window?.electronAPI?.isElectron))
 
   if (!isElectron && typeof window !== 'undefined') {
     const protoNoColon = httpProtocol.replace(':', '')
@@ -268,32 +268,21 @@ export async function checkLocalComfyConnection(options = {}) {
   const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 4500
   let config = options.config ? buildConnection(options.config) : getLocalComfyConnectionSync()
 
-  // Folosește proxy-ul intern pentru conexiuni remote
+  // Detectare Electron mai robustă
+  const isElectron = !!(typeof window !== 'undefined' &&
+    (window.process?.type === 'renderer' ||
+     window.navigator?.userAgent?.includes('Electron') ||
+     window?.electronAPI?.isElectron))
+
+  // Folosește proxy-ul intern pentru conexiuni remote în browser
   const isRemote = config.host !== '127.0.0.1' && config.host !== 'localhost'
 
-  const isElectron = typeof window !== 'undefined' && (
-    !!window?.electronAPI?.isElectron ||
-    /electron/i.test(navigator.userAgent)
-  )
-
-  let testUrl
-  if (isRemote && !isElectron && typeof window !== 'undefined' && window.location.origin) {
-    // Folosește proxy-ul intern pentru a ocoli CORS în browser
-    const protocolNoColon = config.protocol.replace(':', '')
-    testUrl = `${window.location.origin}/api/v1/comfy-proxy/${protocolNoColon}/${config.host}/${config.port}/system_stats`
-  } else {
-    testUrl = `${config.httpBase.replace(/\/+$/, '')}/system_stats`
-  }
-
-  // În Electron, forțăm cererea prin protocolul custom 'comfy-test' sau folosim fetchWithHeaders
-  // Ambele trec prin procesul Main care ocolește CORS-ul rendererului.
-  if (isElectron && window.electronAPI?.fetchWithHeaders) {
+  if (isElectron && window.electronAPI?.comfyFetch) {
     try {
-      const finalTestUrl = isRemote ? `comfy-test://test?url=${encodeURIComponent(testUrl)}` : testUrl
-      const result = await window.electronAPI.fetchWithHeaders(finalTestUrl, {
-        method: 'GET',
-        timeout: timeoutMs
-      })
+      const testUrl = `${config.httpBase.replace(/\/+$/, '')}/system_stats`
+      // Forțăm cererea prin procesul Main care ocolește CORS-ul rendererului.
+      // Host-ul de bypass (comfy-test://) este gestionat intern de handler-ul ComfyFetch din Main
+      const result = await window.electronAPI.comfyFetch(testUrl, { timeout: timeoutMs })
       if (result.ok) {
         return { ok: true, status: result.status, httpBase: config.httpBase }
       }
@@ -317,7 +306,15 @@ export async function checkLocalComfyConnection(options = {}) {
     }
   }
 
-  // Fallback pentru browser sau dacă fetchWithHeaders lipsește
+  // Fallback pentru browser
+  let testUrl
+  if (isRemote && typeof window !== 'undefined' && window.location.origin) {
+    const protocolNoColon = config.protocol.replace(':', '')
+    testUrl = `${window.location.origin}/api/v1/comfy-proxy/${protocolNoColon}/${config.host}/${config.port}/system_stats`
+  } else {
+    testUrl = `${config.httpBase.replace(/\/+$/, '')}/system_stats`
+  }
+
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
   const timer = setTimeout(() => controller?.abort(), timeoutMs)
 
