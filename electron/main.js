@@ -3371,20 +3371,45 @@ process.on('uncaughtException', (error) => {
   console.error('Uncaught exception:', error)
 })
 
-// Handle self-signed certificates for local HTTPS ComfyUI servers
+// Handle self-signed certificates for any ComfyUI server (including remote HTTPS)
 app.on('certificate-error', (event, webContents, url, error, certificate, callback) => {
-  const isLocal = url.startsWith('https://127.0.0.1') || url.startsWith('https://localhost')
-  let isConfiguredRemote = false
-  if (cachedComfyHost && cachedComfyHost !== '127.0.0.1' && cachedComfyHost !== 'localhost') {
+  // Acceptă toate erorile de certificat pentru conexiunile la ComfyUI
+  // (self-signed, expirat, hostname mismatch etc.)
+
+  // Verifică dacă URL-ul pare a fi un server ComfyUI
+  const isComfyUIUrl = (urlString) => {
+    try {
+      const u = new URL(urlString)
+      const pathname = u.pathname
+      // Verifică dacă URL-ul răspunde la endpoint-uri specifice ComfyUI
+      return pathname.includes('/system_stats') ||
+             pathname.includes('/prompt') ||
+             pathname.includes('/history') ||
+             pathname.includes('/queue') ||
+             pathname.includes('/view') ||
+             pathname.includes('/object_info')
+    } catch {
+      return false
+    }
+  }
+
+  // Verifică și dacă URL-ul corespunde cu host-ul configurat în setări
+  let matchesConfiguredHost = false
+  if (cachedComfyHost) {
     try {
       const u = new URL(url)
-      if (u.hostname === cachedComfyHost) isConfiguredRemote = true
+      if (u.hostname === cachedComfyHost) matchesConfiguredHost = true
     } catch (_) {}
   }
-  if (isLocal || isConfiguredRemote) {
+
+  // Acceptă certificatul dacă:
+  // 1. Este local (127.0.0.1 / localhost) SAU
+  // 2. Este host-ul configurat pentru ComfyUI SAU
+  // 3. URL-ul pare a fi un endpoint ComfyUI
+  if (matchesConfiguredHost || isComfyUIUrl(url) || url.startsWith('https://127.0.0.1') || url.startsWith('https://localhost')) {
     event.preventDefault()
-    callback(true)
+    callback(true) // Acceptă certificatul
   } else {
-    callback(false)
+    callback(false) // Respinge pentru alte URL-uri
   }
 })
