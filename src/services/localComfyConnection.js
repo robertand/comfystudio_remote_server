@@ -7,7 +7,11 @@ export const DEFAULT_COMFY_PORT = 8188
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1'])
 
-let cachedPort = DEFAULT_COMFY_PORT
+let cachedConnection = {
+  protocol: 'http:',
+  host: LOCAL_COMFY_HOST,
+  port: DEFAULT_COMFY_PORT,
+}
 let hydrated = false
 let hydrationPromise = null
 let connectionVersion = 0
@@ -30,17 +34,46 @@ function isLoopbackHost(hostname) {
     .every((value) => Number.isInteger(value) && value >= 0 && value <= 255)
 }
 
-function buildConnection(port) {
-  const safePort = normalizePort(port) || DEFAULT_COMFY_PORT
+function buildConnection(connection) {
+  const protocol = connection?.protocol || 'http:'
+  const host = connection?.host || LOCAL_COMFY_HOST
+  const port = normalizePort(connection?.port) || (protocol === 'https:' ? 443 : DEFAULT_COMFY_PORT)
+
+  const httpProtocol = protocol.endsWith(':') ? protocol : `${protocol}:`
+  const isStandardPort = (httpProtocol === 'http:' && port === 80) || (httpProtocol === 'https:' && port === 443)
+  const hostPort = isStandardPort ? host : `${host}:${port}`
+
+  const isElectron = !!(typeof window !== 'undefined' &&
+    (window.process?.type === 'renderer' ||
+     window.navigator?.userAgent?.includes('Electron') ||
+     window?.electronAPI?.isElectron))
+
+  if (!isElectron && typeof window !== 'undefined') {
+    const protoNoColon = httpProtocol.replace(':', '')
+    // The proxy expects /protocol/host/port. If port is omitted in the URL, it should be passed explicitly.
+    const proxyPath = `/api/v1/comfy-proxy/${protoNoColon}/${host}/${port}/`
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const wsBase = `${wsProtocol}//${window.location.host}${proxyPath}ws`
+
+    return {
+      protocol: httpProtocol,
+      host,
+      port,
+      httpBase: proxyPath,
+      wsBase: wsBase,
+    }
+  }
+
   return {
-    host: LOCAL_COMFY_HOST,
-    port: safePort,
-    httpBase: `http://${LOCAL_COMFY_HOST}:${safePort}`,
-    wsBase: `ws://${LOCAL_COMFY_HOST}:${safePort}`,
+    protocol: httpProtocol,
+    host,
+    port,
+    httpBase: `${httpProtocol}//${hostPort}/`,
+    wsBase: `${httpProtocol === 'https:' ? 'wss:' : 'ws:'}//${hostPort}/`,
   }
 }
 
-function readLocalStoragePort() {
+function readLocalStorageConnection() {
   try {
     if (typeof localStorage === 'undefined') return null
     const raw = localStorage.getItem(COMFY_CONNECTION_LOCAL_KEY)
@@ -51,17 +84,17 @@ function readLocalStoragePort() {
     } catch {
       parsed = raw
     }
-    const fromStored = parseStoredPortValue(parsed)
-    return fromStored.success ? fromStored.port : null
+    const fromStored = parseStoredConnectionValue(parsed)
+    return fromStored.success ? fromStored.config : null
   } catch {
     return null
   }
 }
 
-function writeLocalStoragePort(port) {
+function writeLocalStorageConnection(config) {
   try {
     if (typeof localStorage === 'undefined') return
-    localStorage.setItem(COMFY_CONNECTION_LOCAL_KEY, JSON.stringify({ port }))
+    localStorage.setItem(COMFY_CONNECTION_LOCAL_KEY, JSON.stringify(config))
   } catch {
     // Ignore storage write failures.
   }
@@ -76,22 +109,30 @@ function dispatchConnectionChanged(config) {
   }
 }
 
-function parseStoredPortValue(raw) {
+function parseStoredConnectionValue(raw) {
   if (raw && typeof raw === 'object') {
-    if (raw.port !== undefined) {
-      const normalized = normalizePort(raw.port)
-      if (normalized) return { success: true, port: normalized }
-    }
-    if (raw.httpBase) {
-      return parseLocalComfyPortInput(raw.httpBase)
-    }
-    if (raw.url) {
-      return parseLocalComfyPortInput(raw.url)
+    if (raw.host && raw.port !== undefined) {
+      const normalizedPort = normalizePort(raw.port)
+      if (normalizedPort) {
+        return {
+          success: true,
+          config: {
+            protocol: raw.protocol || 'http:',
+            host: raw.host,
+            port: normalizedPort,
+          },
+        }
+      }
     }
   }
   if (typeof raw === 'number') {
     const normalized = normalizePort(raw)
-    if (normalized) return { success: true, port: normalized }
+    if (normalized) {
+      return {
+        success: true,
+        config: { protocol: 'http:', host: LOCAL_COMFY_HOST, port: normalized },
+      }
+    }
   }
   if (typeof raw === 'string') {
     return parseLocalComfyPortInput(raw)
@@ -100,9 +141,9 @@ function parseStoredPortValue(raw) {
 }
 
 function hydrateFromLocalStorage() {
-  const fromLocalStorage = readLocalStoragePort()
+  const fromLocalStorage = readLocalStorageConnection()
   if (fromLocalStorage) {
-    cachedPort = fromLocalStorage
+    cachedConnection = fromLocalStorage
   }
 }
 
@@ -111,15 +152,19 @@ hydrateFromLocalStorage()
 export function parseLocalComfyPortInput(input) {
   const raw = String(input ?? '').trim()
   if (!raw) {
-    return { success: true, port: DEFAULT_COMFY_PORT }
+    return {
+      success: true,
+      config: { protocol: 'http:', host: LOCAL_COMFY_HOST, port: DEFAULT_COMFY_PORT },
+    }
   }
 
   if (/^\d+$/.test(raw)) {
     const port = normalizePort(raw)
-    if (!port) {
-      return { success: false, error: 'Port must be between 1 and 65535.' }
+    if (!port) return { success: false, error: 'Port must be between 1 and 65535.' }
+    return {
+      success: true,
+      config: { protocol: 'http:', host: LOCAL_COMFY_HOST, port },
     }
-    return { success: true, port }
   }
 
   let candidate = raw
@@ -130,25 +175,26 @@ export function parseLocalComfyPortInput(input) {
   try {
     const parsed = new URL(candidate)
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      return { success: false, error: 'Use a local http URL (or just the port number).' }
+      return { success: false, error: 'Use an http or https URL.' }
     }
-    if (!isLoopbackHost(parsed.hostname)) {
-      return { success: false, error: 'Remote ComfyUI is disabled. Use localhost/127.0.0.1 only.' }
+    const port = normalizePort(parsed.port || (parsed.protocol === 'https:' ? 443 : DEFAULT_COMFY_PORT))
+    if (!port) return { success: false, error: 'Invalid port.' }
+    return {
+      success: true,
+      config: {
+        protocol: parsed.protocol,
+        host: parsed.hostname,
+        port,
+      },
     }
-    const port = normalizePort(parsed.port || DEFAULT_COMFY_PORT)
-    if (!port) {
-      return { success: false, error: 'Port must be between 1 and 65535.' }
-    }
-    return { success: true, port }
   } catch {
-    return { success: false, error: 'Invalid value. Use a local port like 8188.' }
+    return { success: false, error: 'Invalid address. Use a port or a URL.' }
   }
 }
 
 export function isLoopbackHttpUrl(value) {
   try {
     const parsed = new URL(String(value || ''))
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
     return isLoopbackHost(parsed.hostname)
   } catch {
     return false
@@ -156,7 +202,7 @@ export function isLoopbackHttpUrl(value) {
 }
 
 export function getLocalComfyConnectionSync() {
-  return buildConnection(cachedPort)
+  return buildConnection(cachedConnection)
 }
 
 export function getLocalComfyHttpBaseSync() {
@@ -168,12 +214,8 @@ export function getLocalComfyWsBaseSync() {
 }
 
 export async function hydrateLocalComfyConnection() {
-  if (hydrated) {
-    return getLocalComfyConnectionSync()
-  }
-  if (hydrationPromise) {
-    return hydrationPromise
-  }
+  if (hydrated) return getLocalComfyConnectionSync()
+  if (hydrationPromise) return hydrationPromise
 
   hydrationPromise = (async () => {
     const startVersion = connectionVersion
@@ -182,21 +224,12 @@ export async function hydrateLocalComfyConnection() {
     if (typeof window !== 'undefined' && window?.electronAPI?.getSetting) {
       try {
         const stored = await window.electronAPI.getSetting(COMFY_CONNECTION_SETTING_KEY)
-        let parsed = parseStoredPortValue(stored)
-
-        // Legacy migration path if previous versions ever stored a free-form URL key.
-        if (!parsed.success) {
-          const legacyUrl = await window.electronAPI.getSetting('comfyUrl')
-          parsed = parseStoredPortValue(legacyUrl)
-        }
-
+        let parsed = parseStoredConnectionValue(stored)
         if (parsed.success && startVersion === connectionVersion) {
-          cachedPort = parsed.port
-          writeLocalStoragePort(cachedPort)
+          cachedConnection = parsed.config
+          writeLocalStorageConnection(cachedConnection)
         }
-      } catch {
-        // Ignore settings read failures and keep local/default values.
-      }
+      } catch {}
     }
 
     hydrated = true
@@ -208,80 +241,125 @@ export async function hydrateLocalComfyConnection() {
   return hydrationPromise
 }
 
-export async function saveLocalComfyConnectionPort(input) {
+export async function saveComfyConnection(input) {
   const parsed = parseLocalComfyPortInput(input)
-  if (!parsed.success) {
-    return { success: false, error: parsed.error }
-  }
+  if (!parsed.success) return { success: false, error: parsed.error }
 
   connectionVersion += 1
-  cachedPort = parsed.port
+  cachedConnection = parsed.config
   const config = getLocalComfyConnectionSync()
-  writeLocalStoragePort(config.port)
+  writeLocalStorageConnection(cachedConnection)
 
   try {
     if (typeof window !== 'undefined' && window?.electronAPI?.setSetting) {
-      await window.electronAPI.setSetting(COMFY_CONNECTION_SETTING_KEY, {
-        host: config.host,
-        port: config.port,
-      })
+      await window.electronAPI.setSetting(COMFY_CONNECTION_SETTING_KEY, cachedConnection)
     }
   } catch (err) {
-    return {
-      success: false,
-      error: err?.message || 'Failed to persist local ComfyUI setting.',
-    }
+    return { success: false, error: err?.message || 'Failed to persist setting.' }
   }
 
   dispatchConnectionChanged(config)
   return { success: true, config }
 }
 
+export const saveLocalComfyConnectionPort = saveComfyConnection
+
 export async function checkLocalComfyConnection(options = {}) {
   const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 4500
-  const maybePort = options.port ?? cachedPort
-  const normalizedPort = normalizePort(maybePort)
-  if (!normalizedPort) {
-    return { ok: false, error: 'Invalid local ComfyUI port.' }
+  let config = options.config ? buildConnection(options.config) : getLocalComfyConnectionSync()
+
+  // Detectare Electron mai robustă
+  const isElectron = !!(typeof window !== 'undefined' &&
+    (window.process?.type === 'renderer' ||
+     window.navigator?.userAgent?.includes('Electron') ||
+     window?.electronAPI?.isElectron))
+
+  // Folosește proxy-ul intern pentru conexiuni remote în browser
+  const isRemote = config.host !== '127.0.0.1' && config.host !== 'localhost'
+
+  if (isElectron && window.electronAPI?.comfyFetch) {
+    try {
+      const testUrl = `${config.httpBase.replace(/\/+$/, '')}/system_stats`
+      // Forțăm cererea prin procesul Main care ocolește CORS-ul rendererului.
+      // Host-ul de bypass (comfy-test://) este gestionat intern de handler-ul ComfyFetch din Main
+      const result = await window.electronAPI.comfyFetch(testUrl, { timeout: timeoutMs })
+      if (result.ok) {
+        return { ok: true, status: result.status, httpBase: config.httpBase }
+      }
+
+      let errorDetail = ''
+      if (result.data) {
+        if (result.data.includes('<html') || result.data.includes('<!DOCTYPE')) {
+          errorDetail = 'Server returned an HTML page instead of JSON. This often means the request was blocked by a firewall (like Cloudflare) or a proxy.'
+        } else {
+          errorDetail = result.data.slice(0, 200)
+        }
+      }
+
+      return {
+        ok: false,
+        status: result.status,
+        error: `ComfyUI returned HTTP ${result.status}${errorDetail ? `: ${errorDetail}` : ''}`
+      }
+    } catch (err) {
+      return { ok: false, error: `Could not connect to ${config.httpBase}: ${err.message}` }
+    }
   }
 
-  const config = buildConnection(normalizedPort)
+  // Fallback pentru browser
+  let testUrl
+  if (isRemote && typeof window !== 'undefined' && window.location.origin) {
+    const protocolNoColon = config.protocol.replace(':', '')
+    testUrl = `${window.location.origin}/api/v1/comfy-proxy/${protocolNoColon}/${config.host}/${config.port}/system_stats`
+  } else {
+    testUrl = `${config.httpBase.replace(/\/+$/, '')}/system_stats`
+  }
+
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
-  const timer = setTimeout(() => {
-    if (controller) controller.abort()
-  }, timeoutMs)
+  const timer = setTimeout(() => controller?.abort(), timeoutMs)
 
   try {
-    const response = await fetch(`${config.httpBase}/system_stats`, {
-      signal: controller?.signal,
-    })
-    if (response.ok) {
-      return {
-        ok: true,
-        status: response.status,
-        httpBase: config.httpBase,
-        port: config.port,
-      }
+    const headers = {
+      'Accept': 'application/json'
     }
+
+    // Doar pentru cereri directe adăugăm antetele speciale (proxy-ul le adaugă oricum)
+    if (!testUrl.includes('/api/v1/comfy-proxy/')) {
+      headers['Origin'] = new URL(config.httpBase).origin
+      headers['Host'] = new URL(config.httpBase).host
+      headers['Referer'] = config.httpBase
+      headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+
+    const response = await fetch(testUrl, {
+      signal: controller?.signal,
+      headers,
+      mode: testUrl.includes(window.location.origin) ? 'same-origin' : 'cors',
+      credentials: 'omit'
+    })
+
+    if (response.ok) {
+      return { ok: true, status: response.status, httpBase: config.httpBase }
+    }
+
+    let errorDetail = ''
+    try {
+      const text = await response.text()
+      if (text.includes('<html') || text.includes('<!DOCTYPE')) {
+        errorDetail = 'Server returned an HTML page instead of JSON. This often means the request was blocked by a firewall (like Cloudflare) or a proxy.'
+      } else {
+        errorDetail = text.slice(0, 200)
+      }
+    } catch {}
+
     return {
       ok: false,
       status: response.status,
-      httpBase: config.httpBase,
-      port: config.port,
-      error: `ComfyUI returned HTTP ${response.status}.`,
+      error: `ComfyUI returned HTTP ${response.status}${errorDetail ? `: ${errorDetail}` : ''}`
     }
   } catch (err) {
-    const isTimeout = err?.name === 'AbortError'
-    return {
-      ok: false,
-      httpBase: config.httpBase,
-      port: config.port,
-      error: isTimeout
-        ? `Timed out connecting to ${config.httpBase}.`
-        : `Could not connect to ${config.httpBase}: ${err?.message || 'Unknown error'}`,
-    }
+    return { ok: false, error: `Could not connect to ${config.httpBase}: ${err.message}` }
   } finally {
     clearTimeout(timer)
   }
 }
-

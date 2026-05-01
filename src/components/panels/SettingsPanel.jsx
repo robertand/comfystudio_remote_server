@@ -18,7 +18,7 @@ const WORKFLOWS_DIRECTORY_PLACEHOLDER = 'C:\\Users\\...\\ComfyUI\\workflow_API'
 
 function SettingsPanel() {
   const initialComfyConnection = getLocalComfyConnectionSync()
-  const [comfyPortInput, setComfyPortInput] = useState(String(initialComfyConnection.port || DEFAULT_COMFY_PORT))
+  const [comfyAddressInput, setComfyAddressInput] = useState(String(initialComfyConnection.port || DEFAULT_COMFY_PORT))
   const [comfyConnectionState, setComfyConnectionState] = useState({
     status: 'idle',
     message: `Local endpoint: ${initialComfyConnection.httpBase}`,
@@ -55,7 +55,7 @@ function SettingsPanel() {
       }
     })()
     hydrateLocalComfyConnection().then((connection) => {
-      setComfyPortInput(String(connection.port || DEFAULT_COMFY_PORT))
+      setComfyAddressInput(String(connection.port || DEFAULT_COMFY_PORT))
       setComfyConnectionState({
         status: 'idle',
         message: `Local endpoint: ${connection.httpBase}`,
@@ -63,7 +63,7 @@ function SettingsPanel() {
     }).catch(() => {
       setComfyConnectionState({
         status: 'error',
-        message: `Could not load local ComfyUI port. Using ${DEFAULT_COMFY_PORT}.`,
+        message: `Could not load ComfyUI connection. Using ${DEFAULT_COMFY_PORT}.`,
       })
     })
   }, [])
@@ -79,7 +79,7 @@ function SettingsPanel() {
   }
 
   const handleSaveComfyConnection = async () => {
-    const result = await saveLocalComfyConnectionPort(comfyPortInput)
+    const result = await saveLocalComfyConnectionPort(comfyAddressInput)
     if (!result.success) {
       setComfyConnectionState({
         status: 'error',
@@ -87,7 +87,7 @@ function SettingsPanel() {
       })
       return false
     }
-    setComfyPortInput(String(result.config.port))
+    setComfyAddressInput(comfyAddressInput)
     setComfyConnectionState({
       status: 'idle',
       message: `Saved local endpoint: ${result.config.httpBase}`,
@@ -96,7 +96,7 @@ function SettingsPanel() {
   }
 
   const handleTestComfyConnection = async () => {
-    const parsed = parseLocalComfyPortInput(comfyPortInput)
+    const parsed = parseLocalComfyPortInput(comfyAddressInput)
     if (!parsed.success) {
       setComfyConnectionState({
         status: 'error',
@@ -106,9 +106,9 @@ function SettingsPanel() {
     }
     setComfyConnectionState({
       status: 'testing',
-      message: `Testing localhost:${parsed.port}...`,
+      message: `Testing ${parsed.config.host}:${parsed.config.port}...`,
     })
-    const testResult = await checkLocalComfyConnection({ port: parsed.port })
+    const testResult = await checkLocalComfyConnection({ config: parsed.config })
     if (testResult.ok) {
       setComfyConnectionState({
         status: 'success',
@@ -118,12 +118,12 @@ function SettingsPanel() {
     }
     setComfyConnectionState({
       status: 'error',
-      message: testResult.error || `Could not connect to localhost:${parsed.port}.`,
+      message: testResult.error || `Could not connect to ${parsed.config.host}:${parsed.config.port}.`,
     })
   }
 
   const handleResetComfyConnection = async () => {
-    setComfyPortInput(String(DEFAULT_COMFY_PORT))
+    setComfyAddressInput(String(DEFAULT_COMFY_PORT))
     const result = await saveLocalComfyConnectionPort(DEFAULT_COMFY_PORT)
     if (!result.success) {
       setComfyConnectionState({
@@ -295,14 +295,11 @@ function SettingsPanel() {
         <Section id="connection" icon={Server} title="ComfyUI Connection">
           <div className="space-y-2">
             <div>
-              <label className="block text-[10px] text-sf-text-muted mb-1">Local ComfyUI Port</label>
+              <label className="block text-[10px] text-sf-text-muted mb-1">ComfyUI Server Address</label>
               <input
-                type="number"
-                min={1}
-                max={65535}
-                step={1}
-                value={comfyPortInput}
-                onChange={(e) => setComfyPortInput(e.target.value)}
+                type="text"
+                value={comfyAddressInput}
+                onChange={(e) => setComfyAddressInput(e.target.value)}
                 onBlur={() => { void handleSaveComfyConnection() }}
                 placeholder={String(DEFAULT_COMFY_PORT)}
                 className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1.5 text-[11px] text-sf-text-primary focus:outline-none focus:border-sf-accent"
