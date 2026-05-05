@@ -8,6 +8,8 @@ export const DEFAULT_COMFY_PORT = 8188
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1'])
 
 let cachedPort = DEFAULT_COMFY_PORT
+let cachedHost = LOCAL_COMFY_HOST
+let cachedProtocol = 'http'
 let hydrated = false
 let hydrationPromise = null
 let connectionVersion = 0
@@ -30,13 +32,38 @@ function isLoopbackHost(hostname) {
     .every((value) => Number.isInteger(value) && value >= 0 && value <= 255)
 }
 
-function buildConnection(port) {
+function buildConnection(port, host = null, protocol = null) {
   const safePort = normalizePort(port) || DEFAULT_COMFY_PORT
+  const isElectron = typeof window !== 'undefined' && (window.electronAPI || navigator.userAgent.includes('Electron'))
+
+  // Resolution order:
+  // 1. Explicit argument
+  // 2. Cached value from settings
+  // 3. Fallback to current window location (for web deployment)
+  // 4. Ultimate fallback to localhost
+
+  let targetHost = host || cachedHost
+  let targetProto = (protocol || cachedProtocol || 'http').replace(':', '')
+
+  if (!host && !isElectron && typeof window !== 'undefined' && window.location.hostname) {
+    // If not in Electron and no host is explicitly provided,
+    // we default to the current host if we haven't hydrated a specific remote host yet.
+    if (cachedHost === LOCAL_COMFY_HOST) {
+       targetHost = window.location.hostname
+       targetProto = window.location.protocol.replace(':', '')
+    }
+  }
+
+  const wsProto = targetProto === 'https' ? 'wss' : 'ws'
+  const portSuffix = (targetProto === 'https' && safePort === 443) || (targetProto === 'http' && safePort === 80)
+    ? ''
+    : `:${safePort}`
+
   return {
-    host: LOCAL_COMFY_HOST,
+    host: targetHost,
     port: safePort,
-    httpBase: `http://${LOCAL_COMFY_HOST}:${safePort}`,
-    wsBase: `ws://${LOCAL_COMFY_HOST}:${safePort}`,
+    httpBase: `${targetProto}://${targetHost}${portSuffix}`,
+    wsBase: `${wsProto}://${targetHost}${portSuffix}`,
   }
 }
 
@@ -78,6 +105,10 @@ function dispatchConnectionChanged(config) {
 
 function parseStoredPortValue(raw) {
   if (raw && typeof raw === 'object') {
+    if (raw.host && raw.port) {
+      const normalized = normalizePort(raw.port)
+      if (normalized) return { success: true, port: normalized, host: raw.host, protocol: raw.protocol || 'http' }
+    }
     if (raw.port !== undefined) {
       const normalized = normalizePort(raw.port)
       if (normalized) return { success: true, port: normalized }
@@ -130,18 +161,21 @@ export function parseLocalComfyPortInput(input) {
   try {
     const parsed = new URL(candidate)
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      return { success: false, error: 'Use a local http URL (or just the port number).' }
+      return { success: false, error: 'Use an http or https URL (or just the port number).' }
     }
-    if (!isLoopbackHost(parsed.hostname)) {
-      return { success: false, error: 'Remote ComfyUI is disabled. Use localhost/127.0.0.1 only.' }
-    }
-    const port = normalizePort(parsed.port || DEFAULT_COMFY_PORT)
+
+    const port = normalizePort(parsed.port || (parsed.protocol === 'https:' ? 443 : DEFAULT_COMFY_PORT))
     if (!port) {
       return { success: false, error: 'Port must be between 1 and 65535.' }
     }
-    return { success: true, port }
+    return {
+      success: true,
+      port,
+      host: parsed.hostname,
+      protocol: parsed.protocol.replace(':', '')
+    }
   } catch {
-    return { success: false, error: 'Invalid value. Use a local port like 8188.' }
+    return { success: false, error: 'Invalid value. Use a port like 8188 or a full URL.' }
   }
 }
 
@@ -156,7 +190,7 @@ export function isLoopbackHttpUrl(value) {
 }
 
 export function getLocalComfyConnectionSync() {
-  return buildConnection(cachedPort)
+  return buildConnection(cachedPort, cachedHost, cachedProtocol)
 }
 
 export function getLocalComfyHttpBaseSync() {
@@ -192,6 +226,8 @@ export async function hydrateLocalComfyConnection() {
 
         if (parsed.success && startVersion === connectionVersion) {
           cachedPort = parsed.port
+          if (parsed.host) cachedHost = parsed.host
+          if (parsed.protocol) cachedProtocol = parsed.protocol
           writeLocalStoragePort(cachedPort)
         }
       } catch {
@@ -216,6 +252,9 @@ export async function saveLocalComfyConnectionPort(input) {
 
   connectionVersion += 1
   cachedPort = parsed.port
+  if (parsed.host) cachedHost = parsed.host
+  if (parsed.protocol) cachedProtocol = parsed.protocol
+
   const config = getLocalComfyConnectionSync()
   writeLocalStoragePort(config.port)
 
@@ -224,6 +263,7 @@ export async function saveLocalComfyConnectionPort(input) {
       await window.electronAPI.setSetting(COMFY_CONNECTION_SETTING_KEY, {
         host: config.host,
         port: config.port,
+        protocol: cachedProtocol
       })
     }
   } catch (err) {

@@ -15,6 +15,7 @@ export default defineConfig({
     },
   },
   server: {
+    allowedHosts: true,
     port: 5173,
     // Proxy requests to ComfyUI to avoid CORS issues
     proxy: {
