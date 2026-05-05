@@ -32,11 +32,18 @@ function isLoopbackHost(hostname) {
 
 function buildConnection(port) {
   const safePort = normalizePort(port) || DEFAULT_COMFY_PORT
+  const isElectron = typeof window !== 'undefined' && (window.electronAPI || navigator.userAgent.includes('Electron'))
+
+  // If not in Electron, use current host as fallback for ComfyUI
+  const currentHost = (!isElectron && typeof window !== 'undefined' && window.location.hostname) ? window.location.hostname : LOCAL_COMFY_HOST
+  const currentProto = (!isElectron && typeof window !== 'undefined' && window.location.protocol) ? window.location.protocol.replace(':', '') : 'http'
+  const wsProto = currentProto === 'https' ? 'wss' : 'ws'
+
   return {
-    host: LOCAL_COMFY_HOST,
+    host: currentHost,
     port: safePort,
-    httpBase: `http://${LOCAL_COMFY_HOST}:${safePort}`,
-    wsBase: `ws://${LOCAL_COMFY_HOST}:${safePort}`,
+    httpBase: `${currentProto}://${currentHost}:${safePort}`,
+    wsBase: `${wsProto}://${currentHost}:${safePort}`,
   }
 }
 
@@ -132,7 +139,9 @@ export function parseLocalComfyPortInput(input) {
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       return { success: false, error: 'Use a local http URL (or just the port number).' }
     }
-    if (!isLoopbackHost(parsed.hostname)) {
+
+    const isElectron = typeof window !== 'undefined' && (window.electronAPI || navigator.userAgent.includes('Electron'))
+    if (isElectron && !isLoopbackHost(parsed.hostname)) {
       return { success: false, error: 'Remote ComfyUI is disabled. Use localhost/127.0.0.1 only.' }
     }
     const port = normalizePort(parsed.port || DEFAULT_COMFY_PORT)
